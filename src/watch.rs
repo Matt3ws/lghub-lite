@@ -155,8 +155,8 @@ pub enum Cmd {
     SetDpi(u16),
     SetRate(u32),
     SetMode(u8),
-    /// Corsair headset: LED brightness 0..=1000.
-    SetBrightness(u16),
+    /// Corsair headset: all LEDs (logo and mic) on or off.
+    SetLights(bool),
     /// Corsair headset: auto-off after this many idle minutes, 0 = never.
     SetAutoOff(u32),
     /// Build or refine the measured battery curve from the voltage recording.
@@ -271,6 +271,11 @@ struct Polled {
     percent: Option<u8>,
     /// Last known settings (Corsair), kept current from sets and events.
     settings: Option<corsair::Settings>,
+    /// The settings folder (the preset file's), which holds the lights choice.
+    dir: PathBuf,
+    /// The owner switched the lights off (`corsair::lights_off_wanted`); applied again whenever
+    /// the headset comes back.
+    lights_off: bool,
 }
 
 impl Polled {
@@ -330,11 +335,38 @@ impl Polled {
         }
     }
 
+    /// The owner switched this headset's lights off: apply that again (after the headset was
+    /// switched on or the dongle plugged in, which brings back hardware mode and its LEDs).
+    fn restore_lights(&mut self, out: &mut Vec<Update>) {
+        if !self.lights_off {
+            return;
+        }
+        let Link::Corsair { c, .. } = &mut self.link else {
+            return;
+        };
+        match c.set_lights(false) {
+            Ok(()) => {
+                let s = self
+                    .settings
+                    .unwrap_or_default()
+                    .with(corsair::prop::BRIGHTNESS as u16, 0);
+                self.settings = Some(s);
+                out.push(Update::Headset {
+                    sel: self.sel(),
+                    settings: s,
+                });
+            }
+            Err(e) => out.push(Update::Line(format!("  {:<8} lights off failed: {e}", self.sel()))),
+        }
+    }
+
     /// Timer read: report changes, and offline/online transitions.
     fn poll(&mut self, out: &mut Vec<Update>) {
         match self.read() {
             Ok((text, pct)) => {
-                self.off = false;
+                if std::mem::take(&mut self.off) {
+                    self.restore_lights(out);
+                }
                 self.percent = Some(pct);
                 if text != self.last {
                     self.last = text.clone();
@@ -368,9 +400,13 @@ impl Polled {
         use corsair::prop;
         let s = self.settings.unwrap_or_default();
         self.settings = Some(match *cmd {
-            Cmd::SetBrightness(v) => {
-                c.set(prop::BRIGHTNESS, v as u32)?;
-                s.with(prop::BRIGHTNESS as u16, v as u32)
+            Cmd::SetLights(on) => {
+                c.set_lights(on)?;
+                self.lights_off = !on;
+                if let Err(e) = corsair::remember_lights(&self.dir, self.pid, on) {
+                    crate::verbose(format_args!("{:04x}: cannot remember the lights choice: {e}", self.pid));
+                }
+                s.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 })
             }
             Cmd::SetAutoOff(0) => {
                 c.set_auto_off(0)?;
@@ -392,7 +428,10 @@ impl Polled {
             Ok((t, p)) => {
                 self.last = t;
                 self.percent = Some(p);
-                self.off = false;
+                if std::mem::take(&mut self.off) {
+                    // back on: the drawer gets the result through the settings read below
+                    self.restore_lights(&mut Vec::new());
+                }
             }
             Err(_) => self.percent = None,
         }
@@ -649,6 +688,7 @@ impl Monitor {
                 sels: vec![c.sel()],
             });
         }
+        let dir = self.presets.parent().map(Path::to_path_buf).unwrap_or_default();
         for (pid, product, info, protocol) in found {
             if self.polled.iter().any(|c| c.key == info.iface) {
                 continue;
@@ -676,6 +716,8 @@ impl Monitor {
                         last: String::new(),
                         percent: None,
                         settings: None,
+                        lights_off: protocol == Protocol::Corsair && corsair::lights_off_wanted(&dir, pid),
+                        dir: dir.clone(),
                     };
                     let (battery, battery_percent) = match c.read() {
                         Ok((t, p)) => {
@@ -695,6 +737,9 @@ impl Monitor {
                         battery,
                         battery_percent,
                     });
+                    if !c.off {
+                        c.restore_lights(out);
+                    }
                     self.polled.push(c);
                 }
                 Err(e) => out.push(Update::Line(format!("! {pid:04x}  {product}  cannot open: {e}"))),
@@ -815,7 +860,7 @@ impl Monitor {
                 Cmd::SetMode(m) => {
                     device::set_mode_verified(&mut l.h, i, *m)?;
                 }
-                Cmd::SetBrightness(_) | Cmd::SetAutoOff(_) => {
+                Cmd::SetLights(_) | Cmd::SetAutoOff(_) => {
                     return Err(Error::Other("only Corsair headsets have this setting".into()));
                 }
                 Cmd::SavePreset { dpi, rate } => {

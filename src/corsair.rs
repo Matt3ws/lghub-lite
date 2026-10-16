@@ -302,22 +302,27 @@ impl Corsair {
                 return Err(Error::Other(format!("value {value} outside {lo}..={hi}")));
             }
         }
-        let mut wrap = self.needs_software_mode;
-        if !wrap {
+        let mut done = false;
+        if !self.needs_software_mode {
             let (property, value) = sets[0];
             let status = self.set_once(property, value)?;
-            // anything but software mode counts as hardware mode, its normal state
-            wrap = status == NOT_NOW && self.get(HEADSET, prop::MODE)? != MODE_SOFTWARE;
-            if !wrap {
+            if status == NOT_NOW {
+                self.needs_software_mode = true;
+            } else {
                 check(status, 0, property)?;
                 for &(p, v) in &sets[1..] {
                     check(self.set_once(p, v)?, 0, p)?;
                 }
+                done = true;
             }
         }
-        if wrap {
-            self.needs_software_mode = true;
-            check(self.set_once(prop::MODE, MODE_SOFTWARE)?, 0, prop::MODE)?;
+        if !done {
+            // Already in software mode = lights off (see `set_lights`): stay there. Anything else
+            // counts as hardware mode, its normal state, and is restored afterwards.
+            let held = self.get(HEADSET, prop::MODE)? == MODE_SOFTWARE;
+            if !held {
+                check(self.set_once(prop::MODE, MODE_SOFTWARE)?, 0, prop::MODE)?;
+            }
             let mut r = Ok(());
             for &(p, v) in sets {
                 r = self.set_once(p, v).and_then(|s| check(s, 0, p).map(drop));
@@ -325,10 +330,14 @@ impl Corsair {
                     break;
                 }
             }
-            // hardware mode again whatever happened
-            let back = self.set_once(prop::MODE, MODE_HARDWARE);
-            r?;
-            check(back?, 0, prop::MODE)?;
+            if !held {
+                // hardware mode again whatever happened
+                let back = self.set_once(prop::MODE, MODE_HARDWARE);
+                r?;
+                check(back?, 0, prop::MODE)?;
+            } else {
+                r?;
+            }
         }
         for &(property, value) in sets {
             let now = self.get(HEADSET, property)?;
@@ -349,6 +358,36 @@ impl Corsair {
         // the voltage is extra information; a headset without it still has a battery
         let mv = self.get(HEADSET, prop::VOLTAGE).ok();
         Battery::new(tenths, state, mv)
+    }
+
+    /// All headset LEDs on or off.
+    ///
+    /// [HW owner-confirmed] Brightness 0 alone darkens only the logo: in hardware mode the
+    /// headset drives the mic LED itself (lit, red when muted). In software mode with brightness 0
+    /// every LED stays dark, in both boom positions, and the headset stays in software mode on
+    /// its own (30 s observed, no keep-alive). So "off" leaves the headset in software mode and
+    /// "on" returns it to hardware mode at full brightness.
+    pub fn set_lights(&mut self, on: bool) -> Result<(), Error> {
+        let software = self.get(HEADSET, prop::MODE)? == MODE_SOFTWARE;
+        let level = if on { 1000 } else { 0 };
+        if on && !software {
+            return self.set_many(&[(prop::BRIGHTNESS, level)]);
+        }
+        if !software {
+            check(self.set_once(prop::MODE, MODE_SOFTWARE)?, 0, prop::MODE)?;
+            self.needs_software_mode = true;
+        }
+        check(self.set_once(prop::BRIGHTNESS, level)?, 0, prop::BRIGHTNESS)?;
+        if on {
+            check(self.set_once(prop::MODE, MODE_HARDWARE)?, 0, prop::MODE)?;
+        }
+        let now = self.get(HEADSET, prop::BRIGHTNESS)?;
+        if now != level {
+            return Err(Error::Other(format!(
+                "lights: set brightness {level}, but it reads {now}"
+            )));
+        }
+        Ok(())
     }
 
     /// Auto-off after `minutes` idle, 0 = never: the timer switch (0x0D) and, when on, its
@@ -436,6 +475,31 @@ impl std::fmt::Display for Settings {
         }
         f.write_str(&parts.join(", "))
     }
+}
+
+/// Where the lights choice is kept: `corsair.txt` in the settings folder, one line per headset
+/// with lights off, e.g. `0a73 lights=off`. Software mode does not survive the headset being
+/// switched off [INF], so the watcher and the app apply "off" again when it comes back.
+fn prefs_path(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.join("corsair.txt")
+}
+
+/// Did the owner switch this headset's lights off?
+pub fn lights_off_wanted(dir: &std::path::Path, pid: u16) -> bool {
+    let want = format!("{pid:04x} lights=off");
+    std::fs::read_to_string(prefs_path(dir)).is_ok_and(|s| s.lines().any(|l| l.trim().eq_ignore_ascii_case(&want)))
+}
+
+pub fn remember_lights(dir: &std::path::Path, pid: u16, on: bool) -> Result<(), String> {
+    let line = format!("{pid:04x} lights=off");
+    let old = std::fs::read_to_string(prefs_path(dir)).unwrap_or_default();
+    let mut lines: Vec<&str> = old.lines().filter(|l| !l.trim().eq_ignore_ascii_case(&line)).collect();
+    if !on {
+        lines.push(&line);
+    }
+    let mut text = lines.join("\n");
+    text.push('\n');
+    crate::config::write_atomic(&prefs_path(dir), &text)
 }
 
 /// Is `property` settable (in `WRITABLE`)?
@@ -568,6 +632,21 @@ mod tests {
         assert_eq!(b.to_string(), "31% discharging (3660 mV)");
         assert_eq!(Battery::new(1000, 3, None).unwrap().to_string(), "100% full");
         assert!(Battery::new(1001, 2, None).is_err());
+    }
+
+    #[test]
+    fn the_lights_choice_is_remembered_per_headset() {
+        let dir = std::env::temp_dir().join(format!("lghub-lite-corsair-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!lights_off_wanted(&dir, 0x0A73));
+        remember_lights(&dir, 0x0A73, false).unwrap();
+        remember_lights(&dir, 0x0A97, false).unwrap();
+        remember_lights(&dir, 0x0A73, false).unwrap(); // no duplicate line
+        assert!(lights_off_wanted(&dir, 0x0A73) && lights_off_wanted(&dir, 0x0A97));
+        assert_eq!(std::fs::read_to_string(prefs_path(&dir)).unwrap().lines().count(), 2);
+        remember_lights(&dir, 0x0A73, true).unwrap();
+        assert!(!lights_off_wanted(&dir, 0x0A73) && lights_off_wanted(&dir, 0x0A97));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -442,12 +442,15 @@ fn corsair_setting(o: &Opts, sel: &str, what: Setting, value: Option<&&str>) -> 
         let bad = |hint: &str| Error::Other(format!("value must be {hint}"));
         match what {
             Setting::Lights => {
-                let level = match *v {
-                    "on" => 1000,
-                    "off" => 0,
+                let on = match *v {
+                    "on" => true,
+                    "off" => false,
                     _ => return Err(bad("on or off")),
                 };
-                c.set(corsair::prop::BRIGHTNESS, level)?;
+                c.set_lights(on)?;
+                // so the watcher and the app switch them off again when the headset comes back
+                let pid = corsair::parse_selector(sel).unwrap_or_default();
+                corsair::remember_lights(&o.curve_dir()?, pid, on).map_err(Error::Other)?;
             }
             Setting::AutoOff => {
                 let min: u32 = match *v {

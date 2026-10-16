@@ -312,6 +312,11 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
     - The app shows the new value at once.
     - Setting events (mic, lighting, auto-off) patch the drawer directly (`Update::Headset`).
     - Lighting is just on (1000) / off (0) at the owner's request.
+  - **[HW 2026-10-17, owner-confirmed] Mic LED:**
+    - With brightness 0 and the headset back in hardware mode, only the logo goes dark. The mic LED stays lit (red when muted): in hardware mode the headset drives it itself.
+    - In **software mode with brightness 0, every LED stays dark in both boom positions**. The headset kept software mode on its own for 30 s, with no keep-alive.
+    - Since v0.4.2, "lights off" (`Corsair::set_lights`) leaves the headset in software mode. "On" sets brightness 1000 and returns to hardware mode. Other sets keep software mode when the headset is already in it.
+    - The choice is kept in `corsair.txt` (`0a73 lights=off`). The watcher and the app apply it again when the headset comes back (switched on, dongle plugged in), because software mode probably does not survive a power cycle [INF; to check].
   - **[HW 2026-10-17] Two processes, one dongle:** while the app (downloaded CI build) was polling, another process's reads received the app's replies; every open handle gets every reply, and replies carry no property. Since v0.4.0 each request holds a shared lock ("corsair-PID": named mutex / flock), so lghub-lite processes take turns. iCUE does not take it, so keep iCUE closed.
   - **[HW 2026-10-17, owner-confirmed]** `watch` printed mic mute/unmute and charger in/out at once, "headset off" within the 30 s quick poll, and the battery again after switching on. A first run showed no events at all: Windows refuses write access to the input-only FF42/2 collection, so `hid::Handle::open` now falls back to read-only for collections without output reports.
 

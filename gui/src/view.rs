@@ -962,8 +962,8 @@ impl App {
             };
             if let Some(b) = h.brightness {
                 let chips = [
-                    ("On".to_string(), Cmd::SetBrightness(1000), b > 0),
-                    ("Off".to_string(), Cmd::SetBrightness(0), b == 0),
+                    ("On".to_string(), Cmd::SetLights(true), b > 0),
+                    ("Off".to_string(), Cmd::SetLights(false), b == 0),
                 ];
                 row(18.0, "Lighting", &chips, "Headset LEDs on or off");
             }

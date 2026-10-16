@@ -316,7 +316,7 @@ impl App {
         {
             use lghub_lite::corsair::prop;
             *h = match cmd {
-                Cmd::SetBrightness(v) => h.with(prop::BRIGHTNESS as u16, v as u32),
+                Cmd::SetLights(on) => h.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 }),
                 Cmd::SetAutoOff(0) => h.with(prop::SLEEP_ENABLED as u16, 0),
                 Cmd::SetAutoOff(m) => h
                     .with(prop::SLEEP_ENABLED as u16, 1)
