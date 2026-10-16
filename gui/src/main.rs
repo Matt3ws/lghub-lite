@@ -43,7 +43,8 @@ enum ToWorker {
 
 enum FromWorker {
     Update(Update),
-    Snapshot(String, Result<Snapshot, String>),
+    // boxed: a Snapshot is several times larger than the other messages
+    Snapshot(String, Result<Box<Snapshot>, String>),
     Fatal(String),
 }
 
@@ -573,7 +574,7 @@ fn worker(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 ToWorker::Exec(sel, cmd) => {
-                    let r = mon.exec(&sel, cmd).map_err(|e| e.to_string());
+                    let r = mon.exec(&sel, cmd).map(Box::new).map_err(|e| e.to_string());
                     send(FromWorker::Snapshot(sel, r));
                 }
                 ToWorker::ApplyPresets(on) => mon.set_apply_presets(on),
@@ -596,7 +597,7 @@ impl eframe::App for App {
         while let Ok(m) = self.rx.try_recv() {
             match m {
                 FromWorker::Update(u) => self.on_update(u),
-                FromWorker::Snapshot(sel, r) => self.on_snapshot(sel, r),
+                FromWorker::Snapshot(sel, r) => self.on_snapshot(sel, r.map(|s| *s)),
                 FromWorker::Fatal(e) => self.fatal = Some(e),
             }
         }
