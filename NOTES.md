@@ -297,6 +297,16 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
   - Watch/app: battery and charging (live via events), mic state (watch line), headset off/on.
   - Selector `1b1c:PID`, which `device::parse_selector` rejects, so it cannot collide with a Logitech PID.
   - All tests ran with iCUE closed.
+  - **[HW 2026-10-17, owner-confirmed] Set:** `[0x02, target, 0x01, property u16 LE, value u32 LE]`, i.e. the property is two bytes, as in events (get frames just happen to work with a one-byte property because the next byte is 0). Reply `[0x01, target-8, 0x01, status, …]`; bytes 4.. of a set reply hold stale data, not the new value.
+    - A set with the one-byte layout (value at byte 4) is refused with status 0x09.
+    - With the right layout, writes to the headset in **hardware mode (prop 03 = 1) are refused with 0x09**.
+    - After set 03 = 2 (**software mode**) they are accepted: brightness 1000 → 0 → 330 was read back each time, and the owner saw the LEDs follow. Set 03 = 1 restores hardware mode.
+  - **[HW 2026-10-17] More sets** (software-mode wrapper, read back):
+    - Auto-off timeout 0E: 15 → 10 → 15 min.
+    - Timer switch 0D: 1 → 0 → 1.
+    - Mic mute A6: **refused with status 5 even in software mode**, so it is read-only. The headset's boom or button decides.
+    - Since v0.4.0: `lights`, `autooff` and `mic` (read) in the CLI; Lighting and Auto-off chips plus the mic state in the app's drawer. `WRITABLE` gates which properties may be set.
+  - **[HW 2026-10-17] Two processes, one dongle:** while the app (downloaded CI build) was polling, another process's reads received the app's replies; every open handle gets every reply, and replies carry no property. Since v0.4.0 each request holds a shared lock ("corsair-PID": named mutex / flock), so lghub-lite processes take turns. iCUE does not take it, so keep iCUE closed.
   - **[HW 2026-10-17, owner-confirmed]** `watch` printed mic mute/unmute and charger in/out at once, "headset off" within the 30 s quick poll, and the battery again after switching on. A first run showed no events at all: Windows refuses write access to the input-only FF42/2 collection, so `hid::Handle::open` now falls back to read-only for collections without output reports.
 
 ### Headset (PRO X Wireless, 0aba, HID++ 4.2 on FF43/0202)

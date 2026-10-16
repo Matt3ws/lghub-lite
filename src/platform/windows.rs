@@ -5,10 +5,14 @@ use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::ptr::null;
 
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, SYSTEMTIME};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, SYSTEMTIME, WAIT_ABANDONED, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-use windows_sys::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, OpenMutexW, ReleaseMutex, SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+};
 
 pub fn local_time() -> [u16; 6] {
     let mut t: SYSTEMTIME = unsafe { std::mem::zeroed() };
@@ -58,6 +62,42 @@ pub fn instance_lock(name: &str) -> Option<InstanceLock> {
         return None;
     }
     Some(InstanceLock(h))
+}
+
+/// A lock that lghub-lite processes take in turns (a named mutex), e.g. around a conversation
+/// with a device whose replies cannot be told apart.
+pub struct SharedLock(HANDLE);
+
+// SAFETY: a mutex handle may be used and closed from any thread; ownership is per thread, and
+// `lock`/`unlock` are called in pairs on one thread.
+unsafe impl Send for SharedLock {}
+
+impl Drop for SharedLock {
+    fn drop(&mut self) {
+        // SAFETY: our own handle, closed once.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+pub fn shared_lock(name: &str) -> Option<SharedLock> {
+    let n = mutex_name(name);
+    // SAFETY: NUL-terminated name, default security; opens the mutex if it exists.
+    let h = unsafe { CreateMutexW(null(), 0, n.as_ptr()) };
+    (!h.is_null()).then_some(SharedLock(h))
+}
+
+impl SharedLock {
+    /// Wait up to `ms` for the lock. A holder that exited without releasing it counts as released.
+    pub fn lock(&self, ms: u32) -> bool {
+        // SAFETY: valid mutex handle.
+        let w = unsafe { WaitForSingleObject(self.0, ms) };
+        w == WAIT_OBJECT_0 || w == WAIT_ABANDONED
+    }
+
+    pub fn unlock(&self) {
+        // SAFETY: called only after a successful `lock` on this thread.
+        unsafe { ReleaseMutex(self.0) };
+    }
 }
 
 /// Is the `name` instance running in this session (without taking its lock)?

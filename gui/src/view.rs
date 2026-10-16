@@ -941,6 +941,73 @@ impl App {
                     _ => {}
                 }
             }
+        } else if let Some(h) = s.headset {
+            // Corsair headset: one row of chips per setting it has
+            let mut row = |y: f32, name: &str, chips: &[(String, Cmd, bool)], tip: &str| {
+                text(&p, at(23.0, y + 11.5), Align2::LEFT_CENTER, name, SANS, 11.5, dim);
+                let mut x = 86.0;
+                for (label, c, on) in chips {
+                    let w = text_w(ui, label, MONO, 10.5) + 16.0;
+                    let rect = Rect::from_min_size(at(x, y), vec2(w, 22.0));
+                    if chip_at(ui, rect, label, MONO, 10.5, k, *on, name)
+                        .on_hover_text(tip)
+                        .clicked()
+                        && !on
+                        && !busy
+                    {
+                        cmd = Some(c.clone());
+                    }
+                    x += w + 3.0;
+                }
+            };
+            if let Some(b) = h.brightness {
+                let chips: Vec<_> = [0u16, 250, 500, 750, 1000]
+                    .iter()
+                    .map(|&v| {
+                        let label = if v == 0 {
+                            "Off".to_string()
+                        } else {
+                            format!("{}%", v / 10)
+                        };
+                        (label, Cmd::SetBrightness(v), b == v)
+                    })
+                    .collect();
+                row(18.0, "Lighting", &chips, "LED brightness on the headset");
+                if ![0, 250, 500, 750, 1000].contains(&b) {
+                    let now = format!("now {}%", (b + 5) / 10);
+                    text(&p, at(397.0, 29.5), Align2::RIGHT_CENTER, &now, MONO, 10.5, dim);
+                }
+            }
+            if let Some(m) = h.sleep_minutes {
+                let chips: Vec<_> = [0u32, 5, 10, 15, 30, 60]
+                    .iter()
+                    .map(|&v| {
+                        let label = if v == 0 { "Never".to_string() } else { format!("{v}m") };
+                        (label, Cmd::SetAutoOff(v), m == v)
+                    })
+                    .collect();
+                row(
+                    49.0,
+                    "Auto-off",
+                    &chips,
+                    "Switch the headset off after this long without sound",
+                );
+            }
+            if let Some(muted) = h.mic_muted {
+                // read-only: the headset refuses a mute command; its boom or button decides
+                text(&p, at(23.0, 90.5), Align2::LEFT_CENTER, "Mic", SANS, 11.5, dim);
+                let state = if muted { "Muted" } else { "On" };
+                text(&p, at(86.0, 90.5), Align2::LEFT_CENTER, state, SANS, 11.5, ink);
+                text(
+                    &p,
+                    at(397.0, 90.5),
+                    Align2::RIGHT_CENTER,
+                    "change it on the headset",
+                    SANS,
+                    10.5,
+                    dim,
+                );
+            }
         } else if let Some(label) = s.curve_label.clone() {
             let note = if s.needs_curve {
                 "an estimate until one full discharge is recorded"

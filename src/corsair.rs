@@ -3,10 +3,16 @@
 //! properties that are read and written one at a time.
 //!
 //! Frames are 64 bytes on vendor page 0xFF42, usage 1, of interface 3:
-//! - request (report ID 0x02): `[0x02, target, command, property, value LE…]`, where target
-//!   0x08 is the dongle and 0x09 the headset behind it; command 0x02 = get, 0x01 = set.
+//! - request (report ID 0x02): `[0x02, target, command, property (u16 LE), value LE…]`, where
+//!   target 0x08 is the dongle and 0x09 the headset behind it; command 0x02 = get, 0x01 = set.
 //! - reply (report ID 0x01): `[0x01, target - 8, command, status, value LE (4 bytes)…]`;
-//!   status 0 = ok, 5 = property not supported.
+//!   status 0 = ok, 5 = property not supported, 9 = not allowed now. A get reply carries the
+//!   value; a set reply's value bytes are stale and meaningless.
+//!
+//! [HW] The headset refuses sets (status 9) in hardware mode (property 3 = 1, its normal state)
+//! and accepts them in software mode (3 = 2), which iCUE uses. A value set there stays after
+//! switching back to hardware mode, so `Corsair::set` wraps a refused set in software mode and
+//! always returns to hardware mode; the headset keeps running on its own afterwards.
 //!
 //! Replies do not echo the property, so requests go strictly one at a time and reports already
 //! waiting are drained before each request.
@@ -19,7 +25,7 @@
 //! [HW] Framing, targets, reply layout and the property values below were measured on an HS80 RGB
 //! Wireless (dongle firmware 5.9.130, headset 5.8.48). [PUB] Property names from public
 //! re-implementations (OpenRGB's Corsair peripheral V2 controller, Rexarn's HS80 notes); no
-//! code copied. Only get requests are sent.
+//! code copied. Sets are limited to the properties in `WRITABLE`.
 
 use std::time::{Duration, Instant};
 
@@ -36,8 +42,13 @@ const EVENT_USAGE: u16 = 2;
 pub const DONGLE: u8 = 0x08;
 pub const HEADSET: u8 = 0x09;
 const GET: u8 = 0x02;
+const SET: u8 = 0x01;
 /// Reply status for a property the device does not have. [HW]
 const UNSUPPORTED: u8 = 0x05;
+/// Reply status for a set the headset refuses in hardware mode. [HW]
+const NOT_NOW: u8 = 0x09;
+pub const MODE_HARDWARE: u32 = 1;
+pub const MODE_SOFTWARE: u32 = 2;
 
 /// Properties. [HW] = value seen on the HS80 and its meaning confirmed; [PUB] = name from public
 /// sources, value seen but its meaning not independently confirmed.
@@ -60,9 +71,20 @@ pub mod prop {
     pub const FIRMWARE: u8 = 0x13;
     /// Battery voltage in mV. [HW] (3660 at 31%)
     pub const VOLTAGE: u8 = 0x53;
-    /// Mic muted (1) or open (0). [PUB]
+    /// Mic muted (1) or open (0). [HW] read and pushed as an event; a set is refused with status 5
+    /// even in software mode, so only the headset (boom, button) changes it.
     pub const MIC_MUTED: u8 = 0xA6;
 }
+
+/// Headset properties lghub-lite may set, with their allowed range. Brightness [HW, owner saw the
+/// LEDs follow]; the others are added here only once confirmed on hardware.
+pub const WRITABLE: [(u8, u32, u32); 3] = [
+    (prop::BRIGHTNESS, 0, 1000),
+    // [HW] 1 -> 0 -> 1 read back
+    (prop::SLEEP_ENABLED, 0, 1),
+    // [HW] 15 -> 10 -> 15 min read back; 1 min .. 4 h
+    (prop::SLEEP_MS, 60_000, 14_400_000),
+];
 
 /// Properties shown by `info` and the report: (target, property, name).
 pub const KNOWN: [(u8, u8, &str); 12] = [
@@ -143,17 +165,34 @@ pub fn get_frame(target: u8, property: u8) -> [u8; FRAME] {
     f
 }
 
-/// The reply to a `command` sent to `target`: its value, or the status as an error, or None for
-/// unrelated reports.
-fn parse_reply(f: &[u8], target: u8, command: u8, property: u8) -> Option<Result<u32, Error>> {
+/// [HW] The property is two bytes here; with the value right after a one-byte property the
+/// headset refuses the set.
+pub fn set_frame(target: u8, property: u8, value: u32) -> [u8; FRAME] {
+    let mut f = [0u8; FRAME];
+    f[..5].copy_from_slice(&[REPORT_OUT, target, SET, property, 0]);
+    f[5..9].copy_from_slice(&value.to_le_bytes());
+    f
+}
+
+/// The reply to a `command` sent to `target`: (status, value), or None for unrelated reports.
+fn parse_reply(f: &[u8], target: u8, command: u8) -> Option<(u8, u32)> {
     if f.len() < 8 || f[0] != REPORT_IN || f[1] != target.wrapping_sub(DONGLE) || f[2] != command {
         return None;
     }
-    Some(match f[3] {
-        0 => Ok(u32::from_le_bytes([f[4], f[5], f[6], f[7]])),
+    Some((f[3], u32::from_le_bytes([f[4], f[5], f[6], f[7]])))
+}
+
+fn check(status: u8, value: u32, property: u8) -> Result<u32, Error> {
+    match status {
+        0 => Ok(value),
         UNSUPPORTED => Err(Error::NoFeature(property as u16)),
-        s => Err(Error::Other(format!("Corsair status {s:#04x}"))),
-    })
+        NOT_NOW => Err(Error::Other(format!(
+            "property {property:#04x}: not allowed in this mode (status 0x09)"
+        ))),
+        s => Err(Error::Other(format!(
+            "property {property:#04x}: Corsair status {s:#04x}"
+        ))),
+    }
 }
 
 /// An open Bragi channel to a dongle and the headset behind it.
@@ -161,6 +200,11 @@ pub struct Corsair {
     h: hid::Handle,
     pub trace: bool,
     pub timeout: Duration,
+    /// Taken around each request. Every open handle sees every reply, and replies do not say
+    /// which property they answer, so two lghub-lite processes asking at once (the app and the
+    /// background watcher) could take each other's answers. [HW: the app's polls showed up in
+    /// another process's reads]
+    turn: Option<crate::platform::SharedLock>,
 }
 
 impl Corsair {
@@ -170,6 +214,7 @@ impl Corsair {
             h,
             trace,
             timeout: Duration::from_millis(1000),
+            turn: crate::platform::shared_lock(&format!("corsair-{:04x}", info.pid)),
         })
     }
 
@@ -184,7 +229,26 @@ impl Corsair {
         Ok(r)
     }
 
-    fn request(&mut self, f: &[u8; FRAME]) -> Result<u32, Error> {
+    /// Send one request and wait for its reply: (status, value), holding the shared lock.
+    fn request(&mut self, f: &[u8; FRAME]) -> Result<(u8, u32), Error> {
+        let turn = self.turn.take();
+        if let Some(t) = &turn
+            && !t.lock(3000)
+        {
+            self.turn = turn;
+            return Err(Error::Other(
+                "headset busy (another lghub-lite is talking to it)".into(),
+            ));
+        }
+        let r = self.exchange(f);
+        if let Some(t) = &turn {
+            t.unlock();
+        }
+        self.turn = turn;
+        r
+    }
+
+    fn exchange(&mut self, f: &[u8; FRAME]) -> Result<(u8, u32), Error> {
         // Replies carry no property: drop anything already waiting so it cannot be taken for
         // the reply to this request.
         while self.read(0)?.is_some() {}
@@ -200,15 +264,49 @@ impl Corsair {
             }
             let ms = left.as_millis().min(u32::MAX as u128 - 1) as u32;
             if let Some(r) = self.read(ms)?
-                && let Some(v) = parse_reply(&r, f[1], f[2], f[3])
+                && let Some(v) = parse_reply(&r, f[1], f[2])
             {
-                return v;
+                return Ok(v);
             }
         }
     }
 
     pub fn get(&mut self, target: u8, property: u8) -> Result<u32, Error> {
-        self.request(&get_frame(target, property))
+        let (status, value) = self.request(&get_frame(target, property))?;
+        check(status, value, property)
+    }
+
+    fn set_once(&mut self, property: u8, value: u32) -> Result<u8, Error> {
+        Ok(self.request(&set_frame(HEADSET, property, value))?.0)
+    }
+
+    /// Set a headset property from `WRITABLE` and return the value read back. A set refused in
+    /// hardware mode is repeated in software mode, and hardware mode is restored whatever happens.
+    pub fn set(&mut self, property: u8, value: u32) -> Result<u32, Error> {
+        let &(_, lo, hi) = WRITABLE
+            .iter()
+            .find(|w| w.0 == property)
+            .ok_or_else(|| Error::Other(format!("property {property:#04x} is not writable")))?;
+        if !(lo..=hi).contains(&value) {
+            return Err(Error::Other(format!("value {value} outside {lo}..={hi}")));
+        }
+        let mut status = self.set_once(property, value)?;
+        // anything but software mode counts as hardware mode, its normal state
+        if status == NOT_NOW && self.get(HEADSET, prop::MODE)? != MODE_SOFTWARE {
+            check(self.set_once(prop::MODE, MODE_SOFTWARE)?, 0, prop::MODE)?;
+            let r = self.set_once(property, value);
+            let back = self.set_once(prop::MODE, MODE_HARDWARE);
+            status = r?;
+            check(back?, 0, prop::MODE)?;
+        }
+        check(status, 0, property)?;
+        let now = self.get(HEADSET, property)?;
+        if now != value {
+            return Err(Error::Other(format!(
+                "property {property:#04x}: set {value}, but it reads {now}"
+            )));
+        }
+        Ok(now)
     }
 
     /// The headset's battery. Fails when the headset is off or out of range (the dongle still
@@ -220,6 +318,53 @@ impl Corsair {
         let mv = self.get(HEADSET, prop::VOLTAGE).ok();
         Battery::new(tenths, state, mv)
     }
+
+    /// Auto-off after `minutes` idle, 0 = never: the timer switch (0x0D) and, when on, its
+    /// timeout (0x0E, ms).
+    pub fn set_auto_off(&mut self, minutes: u32) -> Result<(), Error> {
+        if minutes == 0 {
+            return self.set(prop::SLEEP_ENABLED, 0).map(drop);
+        }
+        self.set(prop::SLEEP_MS, minutes.saturating_mul(60_000))?;
+        self.set(prop::SLEEP_ENABLED, 1).map(drop)
+    }
+
+    /// The headset's adjustable settings; a property the headset lacks is None.
+    pub fn settings(&mut self) -> Result<Settings, Error> {
+        let opt = |r: Result<u32, Error>| match r {
+            Ok(v) => Ok(Some(v)),
+            Err(Error::NoFeature(_)) => Ok(None),
+            Err(e) => Err(e),
+        };
+        let brightness = opt(self.get(HEADSET, prop::BRIGHTNESS))?.map(|v| v.min(1000) as u16);
+        let sleep_on = opt(self.get(HEADSET, prop::SLEEP_ENABLED))?;
+        let sleep_ms = opt(self.get(HEADSET, prop::SLEEP_MS))?;
+        let mic_muted = opt(self.get(HEADSET, prop::MIC_MUTED))?.map(|v| v != 0);
+        Ok(Settings {
+            brightness,
+            sleep_minutes: match (sleep_on, sleep_ms) {
+                (Some(0), _) => Some(0),
+                (_, Some(ms)) => Some(ms / 60_000),
+                _ => None,
+            },
+            mic_muted,
+        })
+    }
+}
+
+/// A Corsair headset's adjustable settings as read from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    /// LED brightness 0..=1000.
+    pub brightness: Option<u16>,
+    /// Auto-off after this many idle minutes; 0 = never.
+    pub sleep_minutes: Option<u32>,
+    pub mic_muted: Option<bool>,
+}
+
+/// Is `property` settable (in `WRITABLE`)?
+pub fn writable(property: u8) -> bool {
+    WRITABLE.iter().any(|w| w.0 == property)
 }
 
 /// [PUB] OpenRGB's values; [HW] 2 seen while running on battery.
@@ -306,25 +451,41 @@ mod tests {
     }
 
     #[test]
+    fn set_frames_measured_on_an_hs80() {
+        // [HW] accepted in software mode: brightness 1000, then software and hardware mode
+        assert_eq!(
+            &set_frame(HEADSET, prop::BRIGHTNESS, 1000)[..9],
+            &[0x02, 0x09, 0x01, 0x02, 0x00, 0xE8, 0x03, 0x00, 0x00]
+        );
+        assert_eq!(
+            &set_frame(HEADSET, prop::MODE, MODE_SOFTWARE)[..6],
+            &[0x02, 0x09, 0x01, 0x03, 0x00, 0x02]
+        );
+        // [HW] refused in hardware mode; a set reply's value bytes are stale
+        let refused = frame(&[0x01, 0x01, 0x01, 0x09, 0x4A, 0x01, 0x00, 0x00]);
+        let (s, v) = parse_reply(&refused, HEADSET, SET).unwrap();
+        assert!(check(s, v, prop::BRIGHTNESS).is_err());
+        let ok = frame(&[0x01, 0x01, 0x01, 0x00, 0x4A, 0x01, 0x00, 0x00]);
+        assert_eq!(parse_reply(&ok, HEADSET, SET), Some((0, 330)));
+        assert!(writable(prop::BRIGHTNESS));
+        assert!(!writable(prop::MODE) && !writable(prop::BATTERY));
+    }
+
+    #[test]
     fn replies_measured_on_an_hs80() {
         // [HW] dongle PID, headset battery / state / voltage / firmware, unsupported property
         let pid = frame(&[0x01, 0x00, 0x02, 0x00, 0x73, 0x0A, 0x00, 0x00, 0x1B]);
-        assert_eq!(parse_reply(&pid, DONGLE, GET, prop::PID), Some(Ok(0x0A73)));
-        assert_eq!(parse_reply(&pid, HEADSET, GET, prop::PID), None);
+        assert_eq!(parse_reply(&pid, DONGLE, GET), Some((0, 0x0A73)));
+        assert_eq!(parse_reply(&pid, HEADSET, GET), None);
         let bat = frame(&[0x01, 0x01, 0x02, 0x00, 0x36, 0x01, 0x00, 0x00]);
-        assert_eq!(parse_reply(&bat, HEADSET, GET, prop::BATTERY), Some(Ok(310)));
+        assert_eq!(parse_reply(&bat, HEADSET, GET), Some((0, 310)));
         let fw = frame(&[0x01, 0x01, 0x02, 0x00, 0x05, 0x08, 0x30, 0x00]);
-        assert_eq!(
-            firmware_text(parse_reply(&fw, HEADSET, GET, 0x13).unwrap().unwrap()),
-            "5.8.48"
-        );
+        assert_eq!(firmware_text(parse_reply(&fw, HEADSET, GET).unwrap().1), "5.8.48");
         let none = frame(&[0x01, 0x01, 0x02, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x34, 0x8C, 0xF4]);
-        assert_eq!(
-            parse_reply(&none, HEADSET, GET, 0x46),
-            Some(Err(Error::NoFeature(0x46)))
-        );
+        let (s, v) = parse_reply(&none, HEADSET, GET).unwrap();
+        assert_eq!(check(s, v, 0x46), Err(Error::NoFeature(0x46)));
         // a set reply is not a get reply
-        assert_eq!(parse_reply(&frame(&[0x01, 0x01, 0x01, 0x00]), HEADSET, GET, 0x02), None);
+        assert_eq!(parse_reply(&frame(&[0x01, 0x01, 0x01, 0x00]), HEADSET, GET), None);
 
         let b = Battery::new(310, 2, Some(3660)).unwrap();
         assert_eq!(b.percent(), 31);

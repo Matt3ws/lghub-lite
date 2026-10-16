@@ -65,6 +65,10 @@ jobs:
           timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo
           code=$?
           # still running after 15 s (killed by timeout, 124) = started and kept rendering
+          echo "exit code $code"; [ "$code" -eq 124 ] || exit 1
+          # again with the Corsair headset's settings drawer open
+          timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo --demo-select 3 --demo-drawer
+          code=$?
           echo "exit code $code"; [ "$code" -eq 124 ]
       - name: Release package (the Release workflow's script, so packaging breaks show here)
         run: sh packaging/package-linux.sh ci

@@ -149,6 +149,10 @@ pub enum Cmd {
     SetDpi(u16),
     SetRate(u32),
     SetMode(u8),
+    /// Corsair headset: LED brightness 0..=1000.
+    SetBrightness(u16),
+    /// Corsair headset: auto-off after this many idle minutes, 0 = never.
+    SetAutoOff(u32),
     /// Build or refine the measured battery curve from the voltage recording.
     BuildCurve,
     /// Save the given values as this model's preset (None clears that field).
@@ -181,6 +185,8 @@ pub struct Snapshot {
     pub mode: Option<u8>,
     pub model: Option<u16>,
     pub preset: Option<Preset>,
+    /// Settings of a Corsair headset (lighting and auto-off adjustable, mic read-only).
+    pub headset: Option<corsair::Settings>,
 }
 
 /// One HID++ device on an interface: the direct device (index 0xFF) or a receiver slot.
@@ -337,10 +343,27 @@ impl Polled {
         }
     }
 
+    /// Run a settings command (Corsair only).
+    fn apply(&mut self, cmd: &Cmd) -> Result<(), Error> {
+        let Link::Corsair { c, .. } = &mut self.link else {
+            return Err(Error::Other("this headset supports battery reading only so far".into()));
+        };
+        match *cmd {
+            Cmd::Refresh => Ok(()),
+            Cmd::SetBrightness(v) => c.set(corsair::prop::BRIGHTNESS, v as u32).map(drop),
+            Cmd::SetAutoOff(minutes) => c.set_auto_off(minutes),
+            _ => Err(Error::Other("not a setting of this headset".into())),
+        }
+    }
+
     fn snapshot(&mut self) -> Snapshot {
         let (battery, battery_percent) = match self.read() {
             Ok((t, p)) => (Some(t), Some(p)),
             Err(_) => (Some(audio::HEADSET_OFF.into()), None),
+        };
+        let headset = match &mut self.link {
+            Link::Corsair { c, .. } if battery_percent.is_some() => c.settings().ok(),
+            _ => None,
         };
         Snapshot {
             sel: self.sel(),
@@ -357,6 +380,7 @@ impl Polled {
             mode: None,
             model: None,
             preset: None,
+            headset,
         }
     }
 }
@@ -699,16 +723,15 @@ impl Monitor {
             mode,
             model,
             preset,
+            headset: None,
         })
     }
 
     /// Run a GUI command against one device, then return its fresh state.
     pub fn exec(&mut self, sel: &str, cmd: Cmd) -> Result<Snapshot, Error> {
-        if self.polled.iter().any(|c| c.sel() == sel) {
-            return match cmd {
-                Cmd::Refresh => self.snapshot(sel),
-                _ => Err(Error::Other("this headset supports battery reading only so far".into())),
-            };
+        if let Some(p) = self.polled.iter_mut().find(|c| c.sel() == sel) {
+            p.apply(&cmd)?;
+            return self.snapshot(sel);
         }
         {
             let (l, i) = self.find(sel)?;
@@ -738,6 +761,9 @@ impl Monitor {
                 }
                 Cmd::SetMode(m) => {
                     device::set_mode_verified(&mut l.h, i, *m)?;
+                }
+                Cmd::SetBrightness(_) | Cmd::SetAutoOff(_) => {
+                    return Err(Error::Other("only Corsair headsets have this setting".into()));
                 }
                 Cmd::SavePreset { dpi, rate } => {
                     let model = device::model_id(&mut l.h, i)?;

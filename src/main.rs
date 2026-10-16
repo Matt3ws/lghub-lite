@@ -39,7 +39,10 @@ usage: lghub-lite [--trace] [--verbose] [--swid N] [--config FILE] <command>
                            any step that fails); send the output with a device report
 
 <dev> is PID[:INDEX] as printed by `devices`, e.g. c54d:1 (receiver slot 1) or 0aba.
-Corsair headsets (experimental, info and battery only) are 1b1c:PID, e.g. 1b1c:0a73.
+Corsair headsets (experimental) are 1b1c:PID, e.g. 1b1c:0a73. For them also:
+  lights <dev> [0-100|off]  LED brightness
+  autooff <dev> [MIN|off]   switch off after MIN idle minutes
+  mic <dev>                 mic muted or on (read-only: the headset decides)
 Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\lghub-lite,
 Linux: ~/.config/lghub-lite) unless --config is given.";
 
@@ -126,6 +129,9 @@ fn main() {
             .and_then(|c| corsair::Corsair::open(&c, opts.trace))
             .and_then(|mut h| h.battery())
             .map(|b| println!("{b}")),
+        ["lights", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::Lights, rest.first()),
+        ["autooff", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::AutoOff, rest.first()),
+        ["mic", d] => corsair_setting(&opts, d, Setting::Mic, None),
         ["info", d] => match centurion_for(d) {
             Some(c) => centurion_probe(&c, opts.trace, false),
             None => with_dev(&opts, d, info),
@@ -420,6 +426,63 @@ fn corsair_for(sel: &str) -> Result<hid::Info, Error> {
         .find(|c| c.0 == pid)
         .map(|c| c.2)
         .ok_or_else(|| Error::Other(format!("no Corsair headset {sel} (run `devices`)")))
+}
+
+#[derive(Clone, Copy)]
+enum Setting {
+    Lights,
+    AutoOff,
+    Mic,
+}
+
+/// `lights` / `autooff` / `mic`: show a Corsair headset setting, or set it and show the result.
+fn corsair_setting(o: &Opts, sel: &str, what: Setting, value: Option<&&str>) -> Result<(), Error> {
+    let mut c = corsair::Corsair::open(&corsair_for(sel)?, o.trace)?;
+    if let Some(v) = value {
+        let bad = |hint: &str| Error::Other(format!("value must be {hint}"));
+        match what {
+            Setting::Lights => {
+                let pct: u32 = match *v {
+                    "off" => 0,
+                    v => v
+                        .trim_end_matches('%')
+                        .parse()
+                        .ok()
+                        .filter(|p| *p <= 100)
+                        .ok_or_else(|| bad("0-100 or off"))?,
+                };
+                c.set(corsair::prop::BRIGHTNESS, pct * 10)?;
+            }
+            Setting::AutoOff => {
+                let min: u32 = match *v {
+                    "off" => 0,
+                    v => v
+                        .parse()
+                        .ok()
+                        .filter(|m| (1..=240).contains(m))
+                        .ok_or_else(|| bad("minutes 1-240 or off"))?,
+                };
+                c.set_auto_off(min)?;
+            }
+            // [HW] the headset refuses a mute set; only its boom or button changes it
+            Setting::Mic => return Err(Error::Other("the mic can only be muted on the headset".into())),
+        }
+    }
+    let s = c.settings()?;
+    let na = || "not supported".to_string();
+    let text = match what {
+        Setting::Lights => s.brightness.map(|b| match b {
+            0 => "off".to_string(),
+            b => format!("{}%", (b + 5) / 10),
+        }),
+        Setting::AutoOff => s.sleep_minutes.map(|m| match m {
+            0 => "off".to_string(),
+            m => format!("after {m} min idle"),
+        }),
+        Setting::Mic => s.mic_muted.map(|m| if m { "muted" } else { "on" }.to_string()),
+    };
+    println!("{}", text.unwrap_or_else(na));
+    Ok(())
 }
 
 /// The known properties of a Corsair dongle and headset, then the battery, each read separately
