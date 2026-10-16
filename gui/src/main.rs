@@ -306,6 +306,24 @@ impl App {
             self.snap = snaps.iter().find(|s| s.sel == sel).cloned();
             return;
         }
+        // A Corsair headset takes ~100 ms per request: show the new setting at once (a failure
+        // refreshes it from the headset again).
+        if let Some(h) = self
+            .snap
+            .as_mut()
+            .filter(|s| s.sel == sel)
+            .and_then(|s| s.headset.as_mut())
+        {
+            use lghub_lite::corsair::prop;
+            *h = match cmd {
+                Cmd::SetBrightness(v) => h.with(prop::BRIGHTNESS as u16, v as u32),
+                Cmd::SetAutoOff(0) => h.with(prop::SLEEP_ENABLED as u16, 0),
+                Cmd::SetAutoOff(m) => h
+                    .with(prop::SLEEP_ENABLED as u16, 1)
+                    .with(prop::SLEEP_MS as u16, m * 60_000),
+                _ => *h,
+            };
+        }
         self.pending += 1;
         let _ = self.tx.send(ToWorker::Exec(sel.to_string(), cmd));
         self.waker.wake();
@@ -411,6 +429,12 @@ impl App {
                     && matches!(event, Event::Dpi { .. } | Event::ReportRate { .. });
             }
             Update::Preset { sel, .. } => refresh = self.selected.as_deref() == Some(sel.as_str()),
+            // a Corsair headset announced a changed setting (mic boom, ...): show it at once
+            Update::Headset { sel, settings } => {
+                if let Some(s) = self.snap.as_mut().filter(|s| s.sel == sel) {
+                    s.headset = Some(settings);
+                }
+            }
             Update::Line(_) | Update::Receiver { .. } => {}
         }
         if self.selected.is_none()
@@ -457,6 +481,10 @@ impl App {
             Err(e) => {
                 self.save_preset = false;
                 self.say(true, e);
+                // undo a value shown ahead of the device (see `send`)
+                if self.snap.as_ref().is_some_and(|s| s.sel == sel && s.headset.is_some()) {
+                    self.send(&sel, Cmd::Refresh);
+                }
             }
         }
     }

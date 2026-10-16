@@ -104,6 +104,11 @@ pub enum Update {
         sel: String,
         result: Result<String, String>,
     },
+    /// A Corsair headset's settings changed (an event, e.g. the mic boom).
+    Headset {
+        sel: String,
+        settings: crate::corsair::Settings,
+    },
 }
 
 impl fmt::Display for Update {
@@ -138,6 +143,7 @@ impl fmt::Display for Update {
             Update::Battery { sel, text, .. } => write!(f, "  {sel:<8} battery {text}"),
             Update::Preset { sel, result: Ok(s) } => write!(f, "  {sel:<8} preset applied: {s}"),
             Update::Preset { sel, result: Err(e) } => write!(f, "  {sel:<8} preset failed: {e}"),
+            Update::Headset { sel, settings } => write!(f, "  {sel:<8} {settings}"),
         }
     }
 }
@@ -260,7 +266,11 @@ struct Polled {
     link: Link,
     /// Last battery read failed (headset off or out of range): reported as offline.
     off: bool,
+    /// Last battery text and percentage.
     last: String,
+    percent: Option<u8>,
+    /// Last known settings (Corsair), kept current from sets and events.
+    settings: Option<corsair::Settings>,
 }
 
 impl Polled {
@@ -297,8 +307,8 @@ impl Polled {
         }
     }
 
-    /// A report from the event collection: battery changes are read and reported at once,
-    /// the mic state as a line.
+    /// A report from the event collection: battery changes are read and reported at once; a
+    /// changed setting (mic, lighting, auto-off) is taken from the event itself, no reads.
     fn event(&mut self, r: &[u8], out: &mut Vec<Update>) {
         let Some(n) = corsair::parse_event(r) else {
             return;
@@ -306,11 +316,16 @@ impl Polled {
         crate::verbose(format_args!("{}: event {n:?}", self.sel()));
         match n.property {
             p if p == corsair::prop::BATTERY as u16 || p == corsair::prop::BATTERY_STATE as u16 => self.poll(out),
-            p if p == corsair::prop::MIC_MUTED as u16 => out.push(Update::Line(format!(
-                "  {:<8} mic {}",
-                self.sel(),
-                if n.value != 0 { "muted" } else { "on" }
-            ))),
+            p if n.target == corsair::HEADSET && corsair::Settings::covers(p) => {
+                let s = self.settings.unwrap_or_default().with(p, n.value);
+                if self.settings != Some(s) {
+                    self.settings = Some(s);
+                    out.push(Update::Headset {
+                        sel: self.sel(),
+                        settings: s,
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -320,6 +335,7 @@ impl Polled {
         match self.read() {
             Ok((text, pct)) => {
                 self.off = false;
+                self.percent = Some(pct);
                 if text != self.last {
                     self.last = text.clone();
                     out.push(Update::Battery {
@@ -343,28 +359,58 @@ impl Polled {
         }
     }
 
-    /// Run a settings command (Corsair only).
+    /// Run a settings command (Corsair only). The values set are read back by `Corsair::set*`,
+    /// so the cached settings are updated without reading everything again.
     fn apply(&mut self, cmd: &Cmd) -> Result<(), Error> {
         let Link::Corsair { c, .. } = &mut self.link else {
             return Err(Error::Other("this headset supports battery reading only so far".into()));
         };
-        match *cmd {
-            Cmd::Refresh => Ok(()),
-            Cmd::SetBrightness(v) => c.set(corsair::prop::BRIGHTNESS, v as u32).map(drop),
-            Cmd::SetAutoOff(minutes) => c.set_auto_off(minutes),
-            _ => Err(Error::Other("not a setting of this headset".into())),
-        }
+        use corsair::prop;
+        let s = self.settings.unwrap_or_default();
+        self.settings = Some(match *cmd {
+            Cmd::SetBrightness(v) => {
+                c.set(prop::BRIGHTNESS, v as u32)?;
+                s.with(prop::BRIGHTNESS as u16, v as u32)
+            }
+            Cmd::SetAutoOff(0) => {
+                c.set_auto_off(0)?;
+                s.with(prop::SLEEP_ENABLED as u16, 0)
+            }
+            Cmd::SetAutoOff(minutes) => {
+                c.set_auto_off(minutes)?;
+                s.with(prop::SLEEP_ENABLED as u16, 1)
+                    .with(prop::SLEEP_MS as u16, minutes * 60_000)
+            }
+            _ => return Err(Error::Other("not a setting of this headset".into())),
+        });
+        Ok(())
     }
 
+    /// Read battery and settings afresh (Refresh), and remember them.
     fn snapshot(&mut self) -> Snapshot {
-        let (battery, battery_percent) = match self.read() {
-            Ok((t, p)) => (Some(t), Some(p)),
-            Err(_) => (Some(audio::HEADSET_OFF.into()), None),
+        match self.read() {
+            Ok((t, p)) => {
+                self.last = t;
+                self.percent = Some(p);
+                self.off = false;
+            }
+            Err(_) => self.percent = None,
+        }
+        if let Link::Corsair { c, .. } = &mut self.link
+            && self.percent.is_some()
+        {
+            self.settings = c.settings().ok().or(self.settings);
+        }
+        self.cached()
+    }
+
+    /// The last known state, without asking the headset (each request costs ~100 ms).
+    fn cached(&self) -> Snapshot {
+        let (battery, battery_percent) = match self.percent {
+            Some(p) if !self.off => (Some(self.last.clone()), Some(p)),
+            _ => (Some(audio::HEADSET_OFF.into()), None),
         };
-        let headset = match &mut self.link {
-            Link::Corsair { c, .. } if battery_percent.is_some() => c.settings().ok(),
-            _ => None,
-        };
+        let headset = if battery_percent.is_some() { self.settings } else { None };
         Snapshot {
             sel: self.sel(),
             name: self.product.clone(),
@@ -628,10 +674,13 @@ impl Monitor {
                         link,
                         off: false,
                         last: String::new(),
+                        percent: None,
+                        settings: None,
                     };
                     let (battery, battery_percent) = match c.read() {
                         Ok((t, p)) => {
                             c.last = t.clone();
+                            c.percent = Some(p);
                             (Some(t), Some(p))
                         }
                         Err(_) => {
@@ -730,8 +779,12 @@ impl Monitor {
     /// Run a GUI command against one device, then return its fresh state.
     pub fn exec(&mut self, sel: &str, cmd: Cmd) -> Result<Snapshot, Error> {
         if let Some(p) = self.polled.iter_mut().find(|c| c.sel() == sel) {
+            if matches!(cmd, Cmd::Refresh) {
+                return Ok(p.snapshot());
+            }
+            // a change: only what was set is read back; the rest comes from the cache
             p.apply(&cmd)?;
-            return self.snapshot(sel);
+            return Ok(p.cached());
         }
         {
             let (l, i) = self.find(sel)?;

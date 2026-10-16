@@ -205,6 +205,8 @@ pub struct Corsair {
     /// background watcher) could take each other's answers. [HW: the app's polls showed up in
     /// another process's reads]
     turn: Option<crate::platform::SharedLock>,
+    /// The headset refused a set in hardware mode before: go straight to software mode.
+    needs_software_mode: bool,
 }
 
 impl Corsair {
@@ -215,6 +217,7 @@ impl Corsair {
             trace,
             timeout: Duration::from_millis(1000),
             turn: crate::platform::shared_lock(&format!("corsair-{:04x}", info.pid)),
+            needs_software_mode: false,
         })
     }
 
@@ -283,30 +286,59 @@ impl Corsair {
     /// Set a headset property from `WRITABLE` and return the value read back. A set refused in
     /// hardware mode is repeated in software mode, and hardware mode is restored whatever happens.
     pub fn set(&mut self, property: u8, value: u32) -> Result<u32, Error> {
-        let &(_, lo, hi) = WRITABLE
-            .iter()
-            .find(|w| w.0 == property)
-            .ok_or_else(|| Error::Other(format!("property {property:#04x} is not writable")))?;
-        if !(lo..=hi).contains(&value) {
-            return Err(Error::Other(format!("value {value} outside {lo}..={hi}")));
+        self.set_many(&[(property, value)]).map(|_| value)
+    }
+
+    /// Set several headset properties in one software-mode window, then read each back.
+    /// Every headset request takes ~100 ms over the air [HW], so once the headset has refused a
+    /// set in hardware mode, later sets go straight to the software-mode window.
+    pub fn set_many(&mut self, sets: &[(u8, u32)]) -> Result<(), Error> {
+        for &(property, value) in sets {
+            let &(_, lo, hi) = WRITABLE
+                .iter()
+                .find(|w| w.0 == property)
+                .ok_or_else(|| Error::Other(format!("property {property:#04x} is not writable")))?;
+            if !(lo..=hi).contains(&value) {
+                return Err(Error::Other(format!("value {value} outside {lo}..={hi}")));
+            }
         }
-        let mut status = self.set_once(property, value)?;
-        // anything but software mode counts as hardware mode, its normal state
-        if status == NOT_NOW && self.get(HEADSET, prop::MODE)? != MODE_SOFTWARE {
+        let mut wrap = self.needs_software_mode;
+        if !wrap {
+            let (property, value) = sets[0];
+            let status = self.set_once(property, value)?;
+            // anything but software mode counts as hardware mode, its normal state
+            wrap = status == NOT_NOW && self.get(HEADSET, prop::MODE)? != MODE_SOFTWARE;
+            if !wrap {
+                check(status, 0, property)?;
+                for &(p, v) in &sets[1..] {
+                    check(self.set_once(p, v)?, 0, p)?;
+                }
+            }
+        }
+        if wrap {
+            self.needs_software_mode = true;
             check(self.set_once(prop::MODE, MODE_SOFTWARE)?, 0, prop::MODE)?;
-            let r = self.set_once(property, value);
+            let mut r = Ok(());
+            for &(p, v) in sets {
+                r = self.set_once(p, v).and_then(|s| check(s, 0, p).map(drop));
+                if r.is_err() {
+                    break;
+                }
+            }
+            // hardware mode again whatever happened
             let back = self.set_once(prop::MODE, MODE_HARDWARE);
-            status = r?;
+            r?;
             check(back?, 0, prop::MODE)?;
         }
-        check(status, 0, property)?;
-        let now = self.get(HEADSET, property)?;
-        if now != value {
-            return Err(Error::Other(format!(
-                "property {property:#04x}: set {value}, but it reads {now}"
-            )));
+        for &(property, value) in sets {
+            let now = self.get(HEADSET, property)?;
+            if now != value {
+                return Err(Error::Other(format!(
+                    "property {property:#04x}: set {value}, but it reads {now}"
+                )));
+            }
         }
-        Ok(now)
+        Ok(())
     }
 
     /// The headset's battery. Fails when the headset is off or out of range (the dongle still
@@ -323,10 +355,12 @@ impl Corsair {
     /// timeout (0x0E, ms).
     pub fn set_auto_off(&mut self, minutes: u32) -> Result<(), Error> {
         if minutes == 0 {
-            return self.set(prop::SLEEP_ENABLED, 0).map(drop);
+            return self.set_many(&[(prop::SLEEP_ENABLED, 0)]);
         }
-        self.set(prop::SLEEP_MS, minutes.saturating_mul(60_000))?;
-        self.set(prop::SLEEP_ENABLED, 1).map(drop)
+        self.set_many(&[
+            (prop::SLEEP_MS, minutes.saturating_mul(60_000)),
+            (prop::SLEEP_ENABLED, 1),
+        ])
     }
 
     /// The headset's adjustable settings; a property the headset lacks is None.
@@ -336,30 +370,72 @@ impl Corsair {
             Err(Error::NoFeature(_)) => Ok(None),
             Err(e) => Err(e),
         };
-        let brightness = opt(self.get(HEADSET, prop::BRIGHTNESS))?.map(|v| v.min(1000) as u16);
-        let sleep_on = opt(self.get(HEADSET, prop::SLEEP_ENABLED))?;
-        let sleep_ms = opt(self.get(HEADSET, prop::SLEEP_MS))?;
-        let mic_muted = opt(self.get(HEADSET, prop::MIC_MUTED))?.map(|v| v != 0);
-        Ok(Settings {
-            brightness,
-            sleep_minutes: match (sleep_on, sleep_ms) {
-                (Some(0), _) => Some(0),
-                (_, Some(ms)) => Some(ms / 60_000),
-                _ => None,
-            },
-            mic_muted,
-        })
+        let mut s = Settings::default();
+        for p in [prop::BRIGHTNESS, prop::SLEEP_ENABLED, prop::SLEEP_MS, prop::MIC_MUTED] {
+            if let Some(v) = opt(self.get(HEADSET, p))? {
+                s = s.with(p as u16, v);
+            }
+        }
+        Ok(s)
     }
 }
 
-/// A Corsair headset's adjustable settings as read from it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A Corsair headset's adjustable settings as read from it; None = not read or not present.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Settings {
     /// LED brightness 0..=1000.
     pub brightness: Option<u16>,
-    /// Auto-off after this many idle minutes; 0 = never.
-    pub sleep_minutes: Option<u32>,
+    pub sleep_on: Option<bool>,
+    pub sleep_ms: Option<u32>,
     pub mic_muted: Option<bool>,
+}
+
+impl Settings {
+    /// These settings with one property changed (from a read, a set, or an event); other
+    /// properties leave them as they are.
+    pub fn with(mut self, property: u16, value: u32) -> Settings {
+        match u8::try_from(property) {
+            Ok(prop::BRIGHTNESS) => self.brightness = Some(value.min(1000) as u16),
+            Ok(prop::SLEEP_ENABLED) => self.sleep_on = Some(value != 0),
+            Ok(prop::SLEEP_MS) => self.sleep_ms = Some(value),
+            Ok(prop::MIC_MUTED) => self.mic_muted = Some(value != 0),
+            _ => {}
+        }
+        self
+    }
+
+    /// Is `property` one of these settings?
+    pub fn covers(property: u16) -> bool {
+        Settings::default().with(property, 1) != Settings::default()
+    }
+
+    /// Auto-off after this many idle minutes; 0 = never.
+    pub fn auto_off_minutes(&self) -> Option<u32> {
+        match (self.sleep_on, self.sleep_ms) {
+            (Some(false), _) => Some(0),
+            (_, Some(ms)) => Some(ms / 60_000),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut parts = Vec::new();
+        if let Some(b) = self.brightness {
+            parts.push(if b == 0 { "lights off" } else { "lights on" }.to_string());
+        }
+        if let Some(m) = self.auto_off_minutes() {
+            parts.push(match m {
+                0 => "auto-off never".to_string(),
+                m => format!("auto-off {m} min"),
+            });
+        }
+        if let Some(m) = self.mic_muted {
+            parts.push(if m { "mic muted" } else { "mic on" }.to_string());
+        }
+        f.write_str(&parts.join(", "))
+    }
 }
 
 /// Is `property` settable (in `WRITABLE`)?
@@ -492,6 +568,30 @@ mod tests {
         assert_eq!(b.to_string(), "31% discharging (3660 mV)");
         assert_eq!(Battery::new(1000, 3, None).unwrap().to_string(), "100% full");
         assert!(Battery::new(1001, 2, None).is_err());
+    }
+
+    #[test]
+    fn settings_follow_reads_sets_and_events() {
+        let s = Settings::default()
+            .with(prop::BRIGHTNESS as u16, 330)
+            .with(prop::SLEEP_ENABLED as u16, 1)
+            .with(prop::SLEEP_MS as u16, 900_000)
+            .with(prop::MIC_MUTED as u16, 0);
+        assert_eq!(s.auto_off_minutes(), Some(15));
+        assert_eq!(s.to_string(), "lights on, auto-off 15 min, mic on");
+        // [HW] the mic event `03 01 01 A6 00 01`
+        let n = parse_event(&frame(&[0x03, 0x01, 0x01, 0xA6, 0x00, 0x01, 0, 0, 0])).unwrap();
+        assert!(Settings::covers(n.property));
+        let muted = s.with(n.property, n.value);
+        assert_eq!(muted.mic_muted, Some(true));
+        assert_eq!(muted.with(prop::SLEEP_ENABLED as u16, 0).auto_off_minutes(), Some(0));
+        assert_eq!(
+            muted.with(prop::BRIGHTNESS as u16, 0).to_string(),
+            "lights off, auto-off 15 min, mic muted"
+        );
+        // battery properties are not settings
+        assert!(!Settings::covers(prop::BATTERY as u16));
+        assert_eq!(s.with(prop::BATTERY as u16, 5), s);
     }
 
     #[test]

@@ -306,6 +306,12 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
     - Timer switch 0D: 1 → 0 → 1.
     - Mic mute A6: **refused with status 5 even in software mode**, so it is read-only. The headset's boom or button decides.
     - Since v0.4.0: `lights`, `autooff` and `mic` (read) in the CLI; Lighting and Auto-off chips plus the mic state in the app's drawer. `WRITABLE` gates which properties may be set.
+  - **[HW 2026-10-17] Timing:** a request to the dongle takes ~3 ms, one to the headset ~100 ms (90–110, over the air). So the number of headset requests is what makes the app slow. A light change used to cost 13 of them (~1.3 s): a refused try, a mode check, the software-mode window and a read-back, then a full re-read for the drawer.
+    - Since v0.4.1, `Corsair` remembers that the headset needs software mode.
+    - The watcher keeps the last battery/settings and only reads back what was set (~0.4 s).
+    - The app shows the new value at once.
+    - Setting events (mic, lighting, auto-off) patch the drawer directly (`Update::Headset`).
+    - Lighting is just on (1000) / off (0) at the owner's request.
   - **[HW 2026-10-17] Two processes, one dongle:** while the app (downloaded CI build) was polling, another process's reads received the app's replies; every open handle gets every reply, and replies carry no property. Since v0.4.0 each request holds a shared lock ("corsair-PID": named mutex / flock), so lghub-lite processes take turns. iCUE does not take it, so keep iCUE closed.
   - **[HW 2026-10-17, owner-confirmed]** `watch` printed mic mute/unmute and charger in/out at once, "headset off" within the 30 s quick poll, and the battery again after switching on. A first run showed no events at all: Windows refuses write access to the input-only FF42/2 collection, so `hid::Handle::open` now falls back to read-only for collections without output reports.
 

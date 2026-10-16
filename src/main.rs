@@ -40,7 +40,7 @@ usage: lghub-lite [--trace] [--verbose] [--swid N] [--config FILE] <command>
 
 <dev> is PID[:INDEX] as printed by `devices`, e.g. c54d:1 (receiver slot 1) or 0aba.
 Corsair headsets (experimental) are 1b1c:PID, e.g. 1b1c:0a73. For them also:
-  lights <dev> [0-100|off]  LED brightness
+  lights <dev> [on|off]     headset LEDs on or off
   autooff <dev> [MIN|off]   switch off after MIN idle minutes
   mic <dev>                 mic muted or on (read-only: the headset decides)
 Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\lghub-lite,
@@ -442,16 +442,12 @@ fn corsair_setting(o: &Opts, sel: &str, what: Setting, value: Option<&&str>) -> 
         let bad = |hint: &str| Error::Other(format!("value must be {hint}"));
         match what {
             Setting::Lights => {
-                let pct: u32 = match *v {
+                let level = match *v {
+                    "on" => 1000,
                     "off" => 0,
-                    v => v
-                        .trim_end_matches('%')
-                        .parse()
-                        .ok()
-                        .filter(|p| *p <= 100)
-                        .ok_or_else(|| bad("0-100 or off"))?,
+                    _ => return Err(bad("on or off")),
                 };
-                c.set(corsair::prop::BRIGHTNESS, pct * 10)?;
+                c.set(corsair::prop::BRIGHTNESS, level)?;
             }
             Setting::AutoOff => {
                 let min: u32 = match *v {
@@ -471,11 +467,8 @@ fn corsair_setting(o: &Opts, sel: &str, what: Setting, value: Option<&&str>) -> 
     let s = c.settings()?;
     let na = || "not supported".to_string();
     let text = match what {
-        Setting::Lights => s.brightness.map(|b| match b {
-            0 => "off".to_string(),
-            b => format!("{}%", (b + 5) / 10),
-        }),
-        Setting::AutoOff => s.sleep_minutes.map(|m| match m {
+        Setting::Lights => s.brightness.map(|b| if b == 0 { "off" } else { "on" }.to_string()),
+        Setting::AutoOff => s.auto_off_minutes().map(|m| match m {
             0 => "off".to_string(),
             m => format!("after {m} min idle"),
         }),

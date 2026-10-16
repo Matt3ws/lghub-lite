@@ -142,7 +142,8 @@ impl Options {
                 battery_percent: Some(31),
                 headset: Some(Settings {
                     brightness: Some(330),
-                    sleep_minutes: Some(15),
+                    sleep_on: Some(true),
+                    sleep_ms: Some(900_000),
                     mic_muted: Some(false),
                 }),
                 ..base("1b1c:0a73", "CORSAIR HS80 RGB Wireless Gaming Receiver")

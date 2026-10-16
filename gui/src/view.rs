@@ -961,24 +961,13 @@ impl App {
                 }
             };
             if let Some(b) = h.brightness {
-                let chips: Vec<_> = [0u16, 250, 500, 750, 1000]
-                    .iter()
-                    .map(|&v| {
-                        let label = if v == 0 {
-                            "Off".to_string()
-                        } else {
-                            format!("{}%", v / 10)
-                        };
-                        (label, Cmd::SetBrightness(v), b == v)
-                    })
-                    .collect();
-                row(18.0, "Lighting", &chips, "LED brightness on the headset");
-                if ![0, 250, 500, 750, 1000].contains(&b) {
-                    let now = format!("now {}%", (b + 5) / 10);
-                    text(&p, at(397.0, 29.5), Align2::RIGHT_CENTER, &now, MONO, 10.5, dim);
-                }
+                let chips = [
+                    ("On".to_string(), Cmd::SetBrightness(1000), b > 0),
+                    ("Off".to_string(), Cmd::SetBrightness(0), b == 0),
+                ];
+                row(18.0, "Lighting", &chips, "Headset LEDs on or off");
             }
-            if let Some(m) = h.sleep_minutes {
+            if let Some(m) = h.auto_off_minutes() {
                 let chips: Vec<_> = [0u32, 5, 10, 15, 30, 60]
                     .iter()
                     .map(|&v| {
