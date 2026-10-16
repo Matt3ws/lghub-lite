@@ -361,7 +361,7 @@ impl App {
                     Some(r) => {
                         r.name = name;
                         r.online = true;
-                        r.protocol = Some(protocol).filter(|p| *p != (0, 0));
+                        r.protocol = protocol.hidpp();
                     }
                     None => {
                         let history = History::load(&self.dir, &sel);
@@ -371,7 +371,7 @@ impl App {
                             battery: None,
                             percent: None,
                             online: true,
-                            protocol: Some(protocol).filter(|p| *p != (0, 0)),
+                            protocol: protocol.hidpp(),
                             history,
                             alerted: false,
                             demo: None,

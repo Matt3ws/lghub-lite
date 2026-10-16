@@ -26,6 +26,8 @@ pub struct Info {
     pub usage: u16,
     pub in_len: u16,
     pub out_len: u16,
+    /// Longest feature report, report ID byte included (0 = none).
+    pub feat_len: u16,
     pub product: String,
     /// The same for all collections of one physical interface (grouping key).
     pub iface: String,

@@ -322,6 +322,7 @@ mod tests {
             usage,
             in_len: out,
             out_len: out,
+            feat_len: 0,
             product: "PRO X 2 LIGHTSPEED".into(),
             iface: String::new(),
         };

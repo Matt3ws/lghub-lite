@@ -252,6 +252,53 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
   - Still read-only.
 - **PRO X Wireless 0x1F20 NotAllowed = headset off** [HW 2026-10-16 ~15:20, confirmed by the owner]: every voltage read answered NotAllowed while Root/name still worked (the dongle answers for itself). Since v0.2.3 this shows as "headset off or out of range"; the watcher reports the headset offline until a reading succeeds again.
 
+### Corsair headsets (HS80 RGB Wireless, 1b1c:0a73), 2026-10-17
+- **[HW]** HS80 RGB Wireless: dongle 1b1c:0a73 ("CORSAIR HS80 RGB Wireless Gaming Receiver", firmware 5.9.130); headset 0a71 (firmware 5.8.48). The dongle's interface 3 has:
+  - COL01/02: 0001/0006 (keyboard);
+  - COL03/04: 000C/1 (consumer);
+  - COL05: **FF42/1, 64/64 B** (commands);
+  - COL06: **FF42/2, 64 B in only** (events);
+  - COL07: FF58/1 64/64.
+
+  No feature reports. The same PC's iCUE Commander Core XT (0c2a) also has FF42/1, but with 385-byte reports; `corsair::is_corsair` requires 64 bytes, so it is never touched.
+- **[HW] Framing ("Bragi"):**
+  - **Requests** use report ID 0x02 on FF42/1: `[0x02, target, command, property, value…]`. Report ID 0x00 is refused by Windows ("parameter is incorrect") because the interface has several collections, and 0x03 is "incorrect function".
+  - **Targets:** 0x08 = dongle, 0x09 = headset.
+  - **Commands:** 0x02 = get; 0x01 = set [PUB].
+  - **Replies** on FF42/1 use report ID 0x01: `[0x01, target-8, command, status, value u32 LE]`. Status 0 = ok, 5 = unsupported property.
+  - Replies do not echo the property, so `corsair.rs` drains queued input before every request.
+- **[HW] Properties, read-only sweep 01–FF.** Each entry gives the target/property, the value read, and its meaning. *(confirmed)* marks a meaning confirmed by a human action; the other meanings are [PUB] names from OpenRGB and Rexarn's HS80 notes.
+  - **Headset (target 0x09):**
+    - 0F: 310 = battery 31.0 % (tenths) *(confirmed)*
+    - 10: battery state: 1 charging, 2 discharging *(confirmed with the charger in/out)*; 3 full [PUB]
+    - 53: battery mV, 3657 discharging, ~4055 on the charger *(confirmed)*
+    - 02: brightness 330 of 1000
+    - 03: mode 1 = hardware
+    - 0D: sleep timer on = 1
+    - 0E: sleep timeout ms = 900000
+    - 12: PID 0a71
+    - 13: firmware 05 08 30
+    - A6: mic muted 0/1 *(confirmed)*
+    - also answer, meaning unknown: 17, 3A, 40, 43, 5F, 73, 74, 92, 95, B5, B6
+  - **Dongle (target 0x08):**
+    - 01: 4
+    - 03: 1
+    - 11/12: VID/PID
+    - 13: firmware
+    - 36: 2 (link state? [INF])
+    - also answer: 17, 43, 4B, 5F, 66, 67, 73, 74, 78
+  - **Not on this firmware (status 5):** the sidetone properties 0x46/0x47/0xD1 that Rexarn's notes give for the newer HS80 (dongle 0a97). HeadsetControl's README says HS80 sidetone is a USB-audio mixer control, not HID. Not implemented yet.
+- **[HW] Events** on FF42/2, report ID 0x03: `[0x03, target-8, 0x01, property u16 LE, value u32 LE]`.
+  - Mic mute: `03 01 01 A6 00 01` / `…00 00`.
+  - Charger in/out: `03 01 01 10 00 01` / `…00 02`.
+  - **No event for headset off:** requests to target 0x09 simply time out while the dongle keeps answering. The watcher therefore polls every 30 s while the headset is off (5 min otherwise) and reports it offline in between.
+- **Status (v0.3.0):**
+  - Read-only. `devices`, `info 1b1c:0a73` and `battery 1b1c:0a73` work, and so does the report.
+  - Watch/app: battery and charging (live via events), mic state (watch line), headset off/on.
+  - Selector `1b1c:PID`, which `device::parse_selector` rejects, so it cannot collide with a Logitech PID.
+  - All tests ran with iCUE closed.
+  - **[HW 2026-10-17, owner-confirmed]** `watch` printed mic mute/unmute and charger in/out at once, "headset off" within the 30 s quick poll, and the battery again after switching on. A first run showed no events at all: Windows refuses write access to the input-only FF42/2 collection, so `hid::Handle::open` now falls back to read-only for collections without output reports.
+
 ### Headset (PRO X Wireless, 0aba, HID++ 4.2 on FF43/0202)
 Features: 0x1F20 at index 6, 0x8300 at 5, 0x8310 at 4. [HW]
 
@@ -343,6 +390,7 @@ No `clap`, `serde`, logging crates or async runtime. Dev-only research tool: `de
 | 2026-10-15 | headset 0aba | USB (own dongle) | ping, name, type, firmware, features | ✅ firmware matches agent |
 | 2026-10-15 | headset 0aba | USB (own dongle) | human copied the power-model XML into %APPDATA%\lghub-lite; `battery 0aba` | ✅ percentage shown (human-confirmed); our test copy: 78 % / 18.8 h vs G HUB 78 % / 18.7 h; watch printed the 78 → 77 % drop from its 5-min read |
 | 2026-10-15 | headset 0aba | USB (own dongle) | 0x1F20 battery, 0x8300 sidetone read + write 30 → read-back → 0, 0x8310 EQ read + write attempt | ✅ 3919 mV vs G HUB 80 %; sidetone write/read-back ok; EQ read ok; EQ write refused (InvalidArgument, unchanged) → write removed |
+| 2026-10-17 | Corsair HS80 RGB Wireless (1b1c:0a73) | USB (own dongle) | read-only get sweep 01–FF on dongle and headset; `devices`, `info`, `battery`; `watch` with mic mute/unmute, charger in/out, headset off/on (human run, iCUE closed) | ✅ 31 % / 3657 mV discharging, state 1 on the charger; events for mic and charger shown at once; off/on noticed within 30 s |
 | — | — | — | `cargo test --workspace`: 38 offline byte-exact tests (fixtures from §9 and the [HW] traces above) | ✅ |
 
 All tests ran with G HUB running. G HUB does not manage the SL2.

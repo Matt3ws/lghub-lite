@@ -32,6 +32,13 @@ jobs:
       - name: Release package (the Release workflow's script, so packaging breaks show here)
         shell: pwsh
         run: ./packaging/package-windows.ps1 -Version ci
+      # Downloadable test build of every push (Actions run page → Artifacts), for testing a
+      # branch on hardware without a release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lghub-lite-windows-x64-${{ github.sha }}
+          path: lghub-lite-ci-windows-x64/
+          retention-days: 14
 
   linux:
     # Experimental platform: built, linted and unit-tested here; no Linux hardware tests.

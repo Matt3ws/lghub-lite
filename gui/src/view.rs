@@ -294,7 +294,9 @@ impl App {
         let pct = r.percent.filter(|_| r.online);
         let charging = r.charging();
         let drain = r.history.drain_tenths(now).filter(|_| !charging);
+        let corsair = lghub_lite::corsair::parse_selector(&r.sel).is_some();
         let conn = match r.sel.split_once(':') {
+            _ if corsair => "Corsair wireless dongle".into(),
             Some((_, slot)) => format!("Receiver · slot {slot}"),
             None => "USB receiver".into(),
         };
@@ -304,6 +306,8 @@ impl App {
             chips.push(format!("{mv} mV"));
         } else if let Some((a, b)) = r.protocol {
             chips.push(format!("HID++ {a}.{b}"));
+        } else if corsair {
+            chips.push("Corsair · experimental".into());
         }
         if let Some(s) = snap.filter(|s| s.curve_label.is_some()) {
             let label = s.curve_label.as_deref().unwrap_or("");

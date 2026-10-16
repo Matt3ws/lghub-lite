@@ -1,5 +1,5 @@
 //! A small HID report-descriptor parser: the top-level collections with their usage and the
-//! longest input/output report in each, report ID byte included. That is what Windows'
+//! longest input/output/feature report in each, report ID byte included. That is what Windows'
 //! HidP_GetCaps reports per collection; on Linux hidraw only offers the raw descriptor, so
 //! this turns it into the same `Info` shape. Follows the HID 1.11 spec, §6.2.2 (items).
 
@@ -11,6 +11,7 @@ pub struct Collection {
     /// Longest input / output report in bytes, including the report ID byte when IDs are used.
     pub in_len: u16,
     pub out_len: u16,
+    pub feat_len: u16,
     /// Report IDs used in this collection (0 = none).
     pub report_ids: Vec<u8>,
 }
@@ -28,6 +29,7 @@ struct Globals {
 struct Sizes {
     input: Vec<(u8, u32)>,
     output: Vec<(u8, u32)>,
+    feature: Vec<(u8, u32)>,
 }
 
 fn add(list: &mut Vec<(u8, u32)>, id: u8, bits: u32) {
@@ -71,13 +73,13 @@ pub fn parse(desc: &[u8]) -> Vec<Collection> {
         i += 1 + size;
         match (kind, tag) {
             // main items
-            (0, 0x8) | (0, 0x9) => {
+            (0, 0x8) | (0, 0x9) | (0, 0xB) => {
                 if let Some((_, _, sizes, ids)) = top.as_mut() {
                     let bits = g.report_size * g.report_count;
-                    let list = if tag == 0x8 {
-                        &mut sizes.input
-                    } else {
-                        &mut sizes.output
+                    let list = match tag {
+                        0x8 => &mut sizes.input,
+                        0x9 => &mut sizes.output,
+                        _ => &mut sizes.feature,
                     };
                     add(list, g.report_id, bits);
                     if !ids.contains(&g.report_id) {
@@ -105,12 +107,13 @@ pub fn parse(desc: &[u8]) -> Vec<Collection> {
                         usage,
                         in_len: longest(&sizes.input),
                         out_len: longest(&sizes.output),
+                        feat_len: longest(&sizes.feature),
                         report_ids,
                     });
                 }
                 usages.clear();
             }
-            (0, _) => usages.clear(), // feature and reserved main items
+            (0, _) => usages.clear(), // reserved main items
             // global items
             (1, 0x0) => g.usage_page = data,
             (1, 0x7) => g.report_size = data,
@@ -188,6 +191,19 @@ mod tests {
             (c[1].usage_page, c[1].usage, c[1].in_len, c[1].out_len),
             (0xFF43, 0x0202, 20, 20)
         );
+    }
+
+    #[test]
+    fn feature_reports_are_measured_separately() {
+        let desc = [
+            0x06, 0x42, 0xFF, 0x09, 0x01, 0xA1, 0x01, // page FF42, usage 1, application
+            0x85, 0x02, 0x75, 0x08, 0x95, 0x3F, 0x09, 0x01, 0x91, 0x00, // ID 2, 63 bytes out
+            0x85, 0x03, 0x95, 0x1F, 0x09, 0x01, 0xB1, 0x00, // ID 3, 31 bytes feature
+            0xC0,
+        ];
+        let c = parse(&desc);
+        assert_eq!((c[0].in_len, c[0].out_len, c[0].feat_len), (0, 64, 32));
+        assert_eq!(parse(RECEIVER)[0].feat_len, 0);
     }
 
     #[test]

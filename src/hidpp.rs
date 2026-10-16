@@ -480,6 +480,7 @@ mod tests {
             usage: if out_len == 7 { 1 } else { 2 },
             in_len: out_len,
             out_len,
+            feat_len: 0,
             product: String::new(),
             iface: "i".into(),
         }
