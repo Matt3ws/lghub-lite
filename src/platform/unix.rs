@@ -72,6 +72,42 @@ pub fn instance_lock(name: &str) -> Option<InstanceLock> {
     Some(InstanceLock(f))
 }
 
+/// A lock that lghub-lite processes take in turns (flock on a lock file), e.g. around a
+/// conversation with a device whose replies cannot be told apart.
+pub struct SharedLock(File);
+
+pub fn shared_lock(name: &str) -> Option<SharedLock> {
+    let f = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path(name)?)
+        .ok()?;
+    Some(SharedLock(f))
+}
+
+impl SharedLock {
+    /// Wait up to `ms` for the lock.
+    pub fn lock(&self, ms: u32) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+        loop {
+            // SAFETY: valid fd.
+            if unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    pub fn unlock(&self) {
+        // SAFETY: valid fd.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 /// Is the `name` instance running (without keeping its lock)?
 pub fn instance_running(name: &str) -> bool {
     let Some(p) = lock_path(name) else { return false };

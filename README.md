@@ -47,6 +47,7 @@ folder**; the rest builds and works the same, with a single dependency.
 | PRO X SUPERLIGHT | LIGHTSPEED receiver | list, info, battery, DPI, report rate (tested by a user; it calls itself "PRO X Wireless") |
 | MX Master 4 | Bluetooth LE (macOS) | list, info, battery, DPI read/write (feature 0x2201), presets, background watcher, the app. It has no report rate or onboard profiles to set |
 | PRO X 2 LIGHTSPEED headset | its USB dongle | **experimental**: battery and charging state in the CLI, the app and the tray, over Logitech's newer "Centurion" protocol (battery read confirmed by a user's report) |
+| Corsair HS80 RGB Wireless headset | its USB dongle (`1b1c:0a73`) | **experimental**: battery, charging state and voltage in the CLI, the app and the tray; live charging and mic-mute changes; "headset off" detection; **lighting on/off and auto-off timer** (CLI `lights`, `autooff`; the app's settings drawer). Mic mute is shown but can only be changed on the headset. Close iCUE first. |
 
 Have a different device, or one that does not work? On Windows, double-click **`diagnose.cmd`**
 in the lghub-lite folder (on Linux and macOS: `./lghub-lite report > report.txt`). It collects everything

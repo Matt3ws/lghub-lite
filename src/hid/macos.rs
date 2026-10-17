@@ -228,6 +228,7 @@ pub fn enumerate(vid: u16) -> io::Result<Vec<Info>> {
                     usage: c.usage,
                     in_len: c.in_len,
                     out_len: c.out_len,
+                    feat_len: c.feat_len,
                     product: product.clone(),
                     iface: path.clone(),
                 });
@@ -663,24 +664,31 @@ impl Notifier {
         let (rl, t) = run_loop_thread("lghub-lite hotplug", stop.clone(), move |rl| {
             let w = Box::new(w);
             let ctx = &*w as *const OwnedFd as *mut c_void;
-            // SAFETY: the manager is owned by the cleanup closure; `w` outlives the callbacks.
-            let m = unsafe {
-                let m = IOHIDManagerCreate(std::ptr::null(), 0);
-                let matching = vendor_matching(crate::LOGITECH_VID);
-                IOHIDManagerSetDeviceMatching(m, matching.0);
-                IOHIDManagerRegisterDeviceMatchingCallback(m, Some(on_device), ctx);
-                IOHIDManagerRegisterDeviceRemovalCallback(m, Some(on_device), ctx);
-                IOHIDManagerScheduleWithRunLoop(m, rl, kCFRunLoopDefaultMode);
-                // deliver the initial "matched" calls for present devices now
-                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 0);
-                SendPtr(m)
-            };
+            // One manager per vendor lghub-lite talks to (Logitech, Corsair), sharing the callback.
+            // SAFETY: the managers are owned by the cleanup closure; `w` outlives the callbacks.
+            let ms: Vec<SendPtr> = [crate::LOGITECH_VID, crate::CORSAIR_VID]
+                .into_iter()
+                .map(|vid| unsafe {
+                    let m = IOHIDManagerCreate(std::ptr::null(), 0);
+                    let matching = vendor_matching(vid);
+                    IOHIDManagerSetDeviceMatching(m, matching.0);
+                    IOHIDManagerRegisterDeviceMatchingCallback(m, Some(on_device), ctx);
+                    IOHIDManagerRegisterDeviceRemovalCallback(m, Some(on_device), ctx);
+                    IOHIDManagerScheduleWithRunLoop(m, rl, kCFRunLoopDefaultMode);
+                    SendPtr(m)
+                })
+                .collect();
+            // deliver the initial "matched" calls for present devices now
+            // SAFETY: on this thread's run loop.
+            unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, 0) };
             let rl = SendPtr(rl);
             Box::new(move || {
-                // SAFETY: same manager and run loop, on the same thread.
-                unsafe {
-                    IOHIDManagerUnscheduleFromRunLoop(m.0, rl.0, kCFRunLoopDefaultMode);
-                    CFRelease(m.0);
+                for m in ms {
+                    // SAFETY: same managers and run loop, on the same thread.
+                    unsafe {
+                        IOHIDManagerUnscheduleFromRunLoop(m.0, rl.0, kCFRunLoopDefaultMode);
+                        CFRelease(m.0);
+                    }
                 }
                 drop(w);
             })

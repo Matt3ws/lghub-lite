@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "lghub-lite"
-version = "0.2.3"
+version = "0.4.2"
 dependencies = [
  "libc",
  "windows-sys",

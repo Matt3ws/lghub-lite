@@ -43,7 +43,8 @@ enum ToWorker {
 
 enum FromWorker {
     Update(Update),
-    Snapshot(String, Result<Snapshot, String>),
+    // boxed: a Snapshot is several times larger than the other messages
+    Snapshot(String, Result<Box<Snapshot>, String>),
     Fatal(String),
 }
 
@@ -305,6 +306,24 @@ impl App {
             self.snap = snaps.iter().find(|s| s.sel == sel).cloned();
             return;
         }
+        // A Corsair headset takes ~100 ms per request: show the new setting at once (a failure
+        // refreshes it from the headset again).
+        if let Some(h) = self
+            .snap
+            .as_mut()
+            .filter(|s| s.sel == sel)
+            .and_then(|s| s.headset.as_mut())
+        {
+            use lghub_lite::corsair::prop;
+            *h = match cmd {
+                Cmd::SetLights(on) => h.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 }),
+                Cmd::SetAutoOff(0) => h.with(prop::SLEEP_ENABLED as u16, 0),
+                Cmd::SetAutoOff(m) => h
+                    .with(prop::SLEEP_ENABLED as u16, 1)
+                    .with(prop::SLEEP_MS as u16, m * 60_000),
+                _ => *h,
+            };
+        }
         self.pending += 1;
         let _ = self.tx.send(ToWorker::Exec(sel.to_string(), cmd));
         self.waker.wake();
@@ -361,7 +380,7 @@ impl App {
                     Some(r) => {
                         r.name = name;
                         r.online = true;
-                        r.protocol = Some(protocol).filter(|p| *p != (0, 0));
+                        r.protocol = protocol.hidpp();
                     }
                     None => {
                         let history = History::load(&self.dir, &sel);
@@ -371,7 +390,7 @@ impl App {
                             battery: None,
                             percent: None,
                             online: true,
-                            protocol: Some(protocol).filter(|p| *p != (0, 0)),
+                            protocol: protocol.hidpp(),
                             history,
                             alerted: false,
                             demo: None,
@@ -410,6 +429,12 @@ impl App {
                     && matches!(event, Event::Dpi { .. } | Event::ReportRate { .. });
             }
             Update::Preset { sel, .. } => refresh = self.selected.as_deref() == Some(sel.as_str()),
+            // a Corsair headset announced a changed setting (mic boom, ...): show it at once
+            Update::Headset { sel, settings } => {
+                if let Some(s) = self.snap.as_mut().filter(|s| s.sel == sel) {
+                    s.headset = Some(settings);
+                }
+            }
             Update::Line(_) | Update::Receiver { .. } => {}
         }
         if self.selected.is_none()
@@ -456,6 +481,10 @@ impl App {
             Err(e) => {
                 self.save_preset = false;
                 self.say(true, e);
+                // undo a value shown ahead of the device (see `send`)
+                if self.snap.as_ref().is_some_and(|s| s.sel == sel && s.headset.is_some()) {
+                    self.send(&sel, Cmd::Refresh);
+                }
             }
         }
     }
@@ -573,7 +602,7 @@ fn worker(
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 ToWorker::Exec(sel, cmd) => {
-                    let r = mon.exec(&sel, cmd).map_err(|e| e.to_string());
+                    let r = mon.exec(&sel, cmd).map(Box::new).map_err(|e| e.to_string());
                     send(FromWorker::Snapshot(sel, r));
                 }
                 ToWorker::ApplyPresets(on) => mon.set_apply_presets(on),
@@ -596,7 +625,7 @@ impl eframe::App for App {
         while let Ok(m) = self.rx.try_recv() {
             match m {
                 FromWorker::Update(u) => self.on_update(u),
-                FromWorker::Snapshot(sel, r) => self.on_snapshot(sel, r),
+                FromWorker::Snapshot(sel, r) => self.on_snapshot(sel, r.map(|s| *s)),
                 FromWorker::Fatal(e) => self.fatal = Some(e),
             }
         }

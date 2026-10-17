@@ -18,6 +18,7 @@ use crate::audio::{self, Adc};
 use crate::battery::{self, Curve};
 use crate::centurion::{self, Centurion};
 use crate::config::{self, Preset};
+use crate::corsair::{self, Corsair};
 use crate::device::{self, Dpi, EVENT_FEATURES, Event};
 use crate::hid::{self, Notifier, Signal, Wake, Waker};
 use crate::hidpp::{self, DIRECT, Error, GET_REGISTER, Hidpp};
@@ -33,6 +34,36 @@ macro_rules! say {
 }
 
 /// Something that happened, as data. `Display` gives the CLI's `watch` line.
+/// How lghub-lite talks to a device.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Protocol {
+    /// HID++ (major, minor).
+    Hidpp(u8, u8),
+    /// Logitech Centurion headset (battery only).
+    Centurion,
+    /// Corsair Bragi headset (battery only).
+    Corsair,
+}
+
+impl Protocol {
+    pub fn hidpp(self) -> Option<(u8, u8)> {
+        match self {
+            Protocol::Hidpp(a, b) => Some((a, b)),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Protocol {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Protocol::Hidpp(a, b) => write!(f, "HID++ {a}.{b}"),
+            Protocol::Centurion => f.write_str("Centurion headset"),
+            Protocol::Corsair => f.write_str("Corsair headset"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Update {
     /// Informational line (receiver flags, open errors, ...).
@@ -44,7 +75,7 @@ pub enum Update {
     Added {
         sel: String,
         name: String,
-        protocol: (u8, u8),
+        protocol: Protocol,
         /// Battery text as shown by `battery`, or "unreadable: ..."; None if no battery.
         battery: Option<String>,
         battery_percent: Option<u8>,
@@ -73,6 +104,11 @@ pub enum Update {
         sel: String,
         result: Result<String, String>,
     },
+    /// A Corsair headset's settings changed (an event, e.g. the mic boom).
+    Headset {
+        sel: String,
+        settings: crate::corsair::Settings,
+    },
 }
 
 impl fmt::Display for Update {
@@ -83,15 +119,11 @@ impl fmt::Display for Update {
             Update::Added {
                 sel,
                 name,
-                protocol: (maj, min),
+                protocol,
                 battery,
                 ..
             } => {
-                if (*maj, *min) == (0, 0) {
-                    write!(f, "+ {sel:<8} {name}  (Centurion headset)")?;
-                } else {
-                    write!(f, "+ {sel:<8} {name}  (HID++ {maj}.{min})")?;
-                }
+                write!(f, "+ {sel:<8} {name}  ({protocol})")?;
                 match battery {
                     Some(b) => write!(f, "  battery {b}"),
                     None => Ok(()),
@@ -111,6 +143,7 @@ impl fmt::Display for Update {
             Update::Battery { sel, text, .. } => write!(f, "  {sel:<8} battery {text}"),
             Update::Preset { sel, result: Ok(s) } => write!(f, "  {sel:<8} preset applied: {s}"),
             Update::Preset { sel, result: Err(e) } => write!(f, "  {sel:<8} preset failed: {e}"),
+            Update::Headset { sel, settings } => write!(f, "  {sel:<8} {settings}"),
         }
     }
 }
@@ -122,6 +155,10 @@ pub enum Cmd {
     SetDpi(u16),
     SetRate(u32),
     SetMode(u8),
+    /// Corsair headset: all LEDs (logo and mic) on or off.
+    SetLights(bool),
+    /// Corsair headset: auto-off after this many idle minutes, 0 = never.
+    SetAutoOff(u32),
     /// Build or refine the measured battery curve from the voltage recording.
     BuildCurve,
     /// Save the given values as this model's preset (None clears that field).
@@ -154,6 +191,8 @@ pub struct Snapshot {
     pub mode: Option<u8>,
     pub model: Option<u16>,
     pub preset: Option<Preset>,
+    /// Settings of a Corsair headset (lighting and auto-off adjustable, mic read-only).
+    pub headset: Option<corsair::Settings>,
 }
 
 /// One HID++ device on an interface: the direct device (index 0xFF) or a receiver slot.
@@ -178,6 +217,9 @@ struct Dev {
 }
 
 const BATTERY_POLL: Duration = Duration::from_secs(300);
+/// Poll interval for Corsair headsets, and for any polled headset while it is off: neither
+/// announces being switched off or on, so the battery timer alone would take minutes to notice.
+const QUICK_POLL: Duration = Duration::from_secs(30);
 
 /// One open HID++ interface (a direct device or a receiver).
 struct Live {
@@ -206,34 +248,126 @@ impl Live {
     }
 }
 
-/// A headset on Logitech's Centurion protocol (PRO X 2 LIGHTSPEED): no HID++ interface, its
-/// battery is read on the poll timer. [INF] confirmed only through a user's report.
-struct Cent {
+/// The protocol behind a polled headset.
+enum Link {
+    /// Logitech Centurion (PRO X 2 LIGHTSPEED). [INF] confirmed only through a user's report.
+    Centurion(Centurion),
+    /// Corsair Bragi (HS80 RGB Wireless); `events` is its event collection, waited on with the
+    /// HID++ handles so charging and mic changes show at once. [HW]
+    Corsair { c: Corsair, events: Option<hid::Handle> },
+}
+
+/// A headset without HID++ (Centurion or Corsair): its battery is read on the poll timer, and
+/// more often while it is off so that switching it back on is noticed soon.
+struct Polled {
     key: String,
     pid: u16,
     product: String,
-    c: Centurion,
+    link: Link,
     /// Last battery read failed (headset off or out of range): reported as offline.
     off: bool,
+    /// Last battery text and percentage.
     last: String,
+    percent: Option<u8>,
+    /// Last known settings (Corsair), kept current from sets and events.
+    settings: Option<corsair::Settings>,
+    /// The settings folder (the preset file's), which holds the lights choice.
+    dir: PathBuf,
+    /// The owner switched the lights off (`corsair::lights_off_wanted`); applied again whenever
+    /// the headset comes back.
+    lights_off: bool,
 }
 
-impl Cent {
+impl Polled {
     fn sel(&self) -> String {
-        format!("{:04x}", self.pid)
+        match self.link {
+            Link::Centurion(_) => format!("{:04x}", self.pid),
+            Link::Corsair { .. } => corsair::selector(self.pid),
+        }
+    }
+
+    /// Read every QUICK_POLL rather than only with the battery timer.
+    fn quick(&self) -> bool {
+        self.off || matches!(self.link, Link::Corsair { .. })
+    }
+
+    fn protocol(&self) -> Protocol {
+        match self.link {
+            Link::Centurion(_) => Protocol::Centurion,
+            Link::Corsair { .. } => Protocol::Corsair,
+        }
     }
 
     /// Read the battery: (text, percent).
     fn read(&mut self) -> Result<(String, u8), Error> {
-        let b = self.c.battery()?;
-        Ok((b.to_string(), b.percent))
+        match &mut self.link {
+            Link::Centurion(c) => {
+                let b = c.battery()?;
+                Ok((b.to_string(), b.percent))
+            }
+            Link::Corsair { c, .. } => {
+                let b = c.battery()?;
+                Ok((b.to_string(), b.percent()))
+            }
+        }
+    }
+
+    /// A report from the event collection: battery changes are read and reported at once; a
+    /// changed setting (mic, lighting, auto-off) is taken from the event itself, no reads.
+    fn event(&mut self, r: &[u8], out: &mut Vec<Update>) {
+        let Some(n) = corsair::parse_event(r) else {
+            return;
+        };
+        crate::verbose(format_args!("{}: event {n:?}", self.sel()));
+        match n.property {
+            p if p == corsair::prop::BATTERY as u16 || p == corsair::prop::BATTERY_STATE as u16 => self.poll(out),
+            p if n.target == corsair::HEADSET && corsair::Settings::covers(p) => {
+                let s = self.settings.unwrap_or_default().with(p, n.value);
+                if self.settings != Some(s) {
+                    self.settings = Some(s);
+                    out.push(Update::Headset {
+                        sel: self.sel(),
+                        settings: s,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The owner switched this headset's lights off: apply that again (after the headset was
+    /// switched on or the dongle plugged in, which brings back hardware mode and its LEDs).
+    fn restore_lights(&mut self, out: &mut Vec<Update>) {
+        if !self.lights_off {
+            return;
+        }
+        let Link::Corsair { c, .. } = &mut self.link else {
+            return;
+        };
+        match c.set_lights(false) {
+            Ok(()) => {
+                let s = self
+                    .settings
+                    .unwrap_or_default()
+                    .with(corsair::prop::BRIGHTNESS as u16, 0);
+                self.settings = Some(s);
+                out.push(Update::Headset {
+                    sel: self.sel(),
+                    settings: s,
+                });
+            }
+            Err(e) => out.push(Update::Line(format!("  {:<8} lights off failed: {e}", self.sel()))),
+        }
     }
 
     /// Timer read: report changes, and offline/online transitions.
     fn poll(&mut self, out: &mut Vec<Update>) {
         match self.read() {
             Ok((text, pct)) => {
-                self.off = false;
+                if std::mem::take(&mut self.off) {
+                    self.restore_lights(out);
+                }
+                self.percent = Some(pct);
                 if text != self.last {
                     self.last = text.clone();
                     out.push(Update::Battery {
@@ -257,11 +391,65 @@ impl Cent {
         }
     }
 
-    fn snapshot(&mut self) -> Snapshot {
-        let (battery, battery_percent) = match self.read() {
-            Ok((t, p)) => (Some(t), Some(p)),
-            Err(_) => (Some(audio::HEADSET_OFF.into()), None),
+    /// Run a settings command (Corsair only). The values set are read back by `Corsair::set*`,
+    /// so the cached settings are updated without reading everything again.
+    fn apply(&mut self, cmd: &Cmd) -> Result<(), Error> {
+        let Link::Corsair { c, .. } = &mut self.link else {
+            return Err(Error::Other("this headset supports battery reading only so far".into()));
         };
+        use corsair::prop;
+        let s = self.settings.unwrap_or_default();
+        self.settings = Some(match *cmd {
+            Cmd::SetLights(on) => {
+                c.set_lights(on)?;
+                self.lights_off = !on;
+                if let Err(e) = corsair::remember_lights(&self.dir, self.pid, on) {
+                    crate::verbose(format_args!("{:04x}: cannot remember the lights choice: {e}", self.pid));
+                }
+                s.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 })
+            }
+            Cmd::SetAutoOff(0) => {
+                c.set_auto_off(0)?;
+                s.with(prop::SLEEP_ENABLED as u16, 0)
+            }
+            Cmd::SetAutoOff(minutes) => {
+                c.set_auto_off(minutes)?;
+                s.with(prop::SLEEP_ENABLED as u16, 1)
+                    .with(prop::SLEEP_MS as u16, minutes * 60_000)
+            }
+            _ => return Err(Error::Other("not a setting of this headset".into())),
+        });
+        Ok(())
+    }
+
+    /// Read battery and settings afresh (Refresh), and remember them.
+    fn snapshot(&mut self) -> Snapshot {
+        match self.read() {
+            Ok((t, p)) => {
+                self.last = t;
+                self.percent = Some(p);
+                if std::mem::take(&mut self.off) {
+                    // back on: the drawer gets the result through the settings read below
+                    self.restore_lights(&mut Vec::new());
+                }
+            }
+            Err(_) => self.percent = None,
+        }
+        if let Link::Corsair { c, .. } = &mut self.link
+            && self.percent.is_some()
+        {
+            self.settings = c.settings().ok().or(self.settings);
+        }
+        self.cached()
+    }
+
+    /// The last known state, without asking the headset (each request costs ~100 ms).
+    fn cached(&self) -> Snapshot {
+        let (battery, battery_percent) = match self.percent {
+            Some(p) if !self.off => (Some(self.last.clone()), Some(p)),
+            _ => (Some(audio::HEADSET_OFF.into()), None),
+        };
+        let headset = if battery_percent.is_some() { self.settings } else { None };
         Snapshot {
             sel: self.sel(),
             name: self.product.clone(),
@@ -277,6 +465,7 @@ impl Cent {
             mode: None,
             model: None,
             preset: None,
+            headset,
         }
     }
 }
@@ -284,11 +473,13 @@ impl Cent {
 pub struct Monitor {
     notifier: Notifier,
     live: Vec<Live>,
-    cent: Vec<Cent>,
+    polled: Vec<Polled>,
     swid: u8,
     trace: bool,
     presets: PathBuf,
     next_poll: Instant,
+    /// Next QUICK_POLL of the headsets that need it (`Polled::quick`).
+    next_quick: Instant,
     apply_presets: bool,
 }
 
@@ -299,11 +490,12 @@ impl Monitor {
         let mut m = Monitor {
             notifier,
             live: Vec::new(),
-            cent: Vec::new(),
+            polled: Vec::new(),
             swid,
             trace,
             presets: presets.to_path_buf(),
             next_poll: Instant::now() + BATTERY_POLL,
+            next_quick: Instant::now() + QUICK_POLL,
             apply_presets: true,
         };
         let mut out = Vec::new();
@@ -325,7 +517,7 @@ impl Monitor {
         self.live
             .iter()
             .flat_map(|l| l.devs.iter().map(|d| l.sel(d.index)))
-            .chain(self.cent.iter().map(Cent::sel))
+            .chain(self.polled.iter().map(Polled::sel))
             .collect()
     }
 
@@ -343,17 +535,27 @@ impl Monitor {
             return Ok(out);
         }
         // Map the wake-up to plain indices so the borrow of `live` ends here.
+        #[derive(Clone, Copy)]
+        enum Owner {
+            Live(usize),
+            Polled(usize),
+        }
         enum Got {
-            Report(usize, Vec<u8>),
-            Gone(usize, std::io::Error),
+            Report(Owner, Vec<u8>),
+            Gone(Owner, std::io::Error),
             Pnp,
             Woken,
             Poll,
         }
-        let polling = !self.cent.is_empty() || self.live.iter().any(|l| l.devs.iter().any(|d| d.has_voltage));
+        let polling = !self.polled.is_empty() || self.live.iter().any(|l| l.devs.iter().any(|d| d.has_voltage));
+        let due = if self.polled.iter().any(Polled::quick) {
+            self.next_poll.min(self.next_quick)
+        } else {
+            self.next_poll
+        };
         let timeout = if polling {
             // < FOREVER, so a long wait can never be mistaken for "no timeout"
-            let ms = self.next_poll.saturating_duration_since(Instant::now()).as_millis();
+            let ms = due.saturating_duration_since(Instant::now()).as_millis();
             ms.min(u32::MAX as u128 - 1) as u32
         } else {
             hid::FOREVER
@@ -364,7 +566,13 @@ impl Monitor {
             for (k, l) in self.live.iter_mut().enumerate() {
                 for h in l.h.handles() {
                     hs.push(h);
-                    owner.push(k);
+                    owner.push(Owner::Live(k));
+                }
+            }
+            for (k, p) in self.polled.iter_mut().enumerate() {
+                if let Link::Corsair { events: Some(h), .. } = &mut p.link {
+                    hs.push(h);
+                    owner.push(Owner::Polled(k));
                 }
             }
             let mut extras: Vec<&dyn Signal> = vec![&self.notifier];
@@ -380,10 +588,20 @@ impl Monitor {
             }
         };
         match got {
-            Got::Report(k, r) => handle(&mut self.live[k], &r, self.trace, &mut out),
-            Got::Gone(k, e) => {
+            Got::Report(Owner::Live(k), r) => handle(&mut self.live[k], &r, self.trace, &mut out),
+            Got::Report(Owner::Polled(k), r) => self.polled[k].event(&r, &mut out),
+            Got::Gone(Owner::Live(k), e) => {
                 let l = self.live.remove(k);
                 out.push(removed(&l, Some(e.to_string())));
+            }
+            Got::Gone(Owner::Polled(k), e) => {
+                let p = self.polled.remove(k);
+                out.push(Update::Removed {
+                    pid: p.pid,
+                    product: p.product.clone(),
+                    reason: Some(e.to_string()),
+                    sels: vec![p.sel()],
+                });
             }
             Got::Pnp => {
                 // One plug-in raises several interface notifications; let them settle, then
@@ -393,12 +611,20 @@ impl Monitor {
             }
             Got::Woken => {}
             Got::Poll => {
-                self.next_poll = Instant::now() + BATTERY_POLL;
-                for l in self.live.iter_mut() {
-                    poll_battery(l, &mut out);
-                }
-                for c in self.cent.iter_mut() {
-                    c.poll(&mut out);
+                let now = Instant::now();
+                self.next_quick = now + QUICK_POLL;
+                if now >= self.next_poll {
+                    self.next_poll = now + BATTERY_POLL;
+                    for l in self.live.iter_mut() {
+                        poll_battery(l, &mut out);
+                    }
+                    for c in self.polled.iter_mut() {
+                        c.poll(&mut out);
+                    }
+                } else {
+                    for c in self.polled.iter_mut().filter(|c| c.quick()) {
+                        c.poll(&mut out);
+                    }
                 }
             }
         }
@@ -439,15 +665,21 @@ impl Monitor {
             }
         }
 
-        // Centurion headsets (no HID++ interface of the same PID)
-        let found: Vec<(u16, String, hid::Info)> = centurion::interfaces()
+        // Polled headsets: Centurion (no HID++ interface of the same PID) and Corsair
+        let found: Vec<(u16, String, hid::Info, Protocol)> = centurion::interfaces()
             .into_iter()
             .filter(|c| !ifs.iter().any(|f| f.pid == c.0))
+            .map(|(pid, product, info)| (pid, product, info, Protocol::Centurion))
+            .chain(
+                corsair::interfaces()
+                    .into_iter()
+                    .map(|(pid, product, info)| (pid, product, info, Protocol::Corsair)),
+            )
             .collect();
-        let (keep, gone): (Vec<Cent>, Vec<Cent>) = std::mem::take(&mut self.cent)
+        let (keep, gone): (Vec<Polled>, Vec<Polled>) = std::mem::take(&mut self.polled)
             .into_iter()
             .partition(|c| found.iter().any(|f| f.2.iface == c.key));
-        self.cent = keep;
+        self.polled = keep;
         for c in gone {
             out.push(Update::Removed {
                 pid: c.pid,
@@ -456,23 +688,41 @@ impl Monitor {
                 sels: vec![c.sel()],
             });
         }
-        for (pid, product, info) in found {
-            if self.cent.iter().any(|c| c.key == info.iface) {
+        let dir = self.presets.parent().map(Path::to_path_buf).unwrap_or_default();
+        for (pid, product, info, protocol) in found {
+            if self.polled.iter().any(|c| c.key == info.iface) {
                 continue;
             }
-            match Centurion::open(&info, self.trace) {
-                Ok(c) => {
-                    let mut c = Cent {
+            let link = match protocol {
+                Protocol::Corsair => Corsair::open(&info, self.trace).map(|c| Link::Corsair {
+                    c,
+                    // without it only the poll timer notices changes
+                    events: corsair::event_collection(&info).and_then(|e| {
+                        hid::Handle::open(&e)
+                            .map_err(|err| crate::verbose(format_args!("{pid:04x}: no event collection: {err}")))
+                            .ok()
+                    }),
+                }),
+                _ => Centurion::open(&info, self.trace).map(Link::Centurion),
+            };
+            match link {
+                Ok(link) => {
+                    let mut c = Polled {
                         key: info.iface.clone(),
                         pid,
                         product,
-                        c,
+                        link,
                         off: false,
                         last: String::new(),
+                        percent: None,
+                        settings: None,
+                        lights_off: protocol == Protocol::Corsair && corsair::lights_off_wanted(&dir, pid),
+                        dir: dir.clone(),
                     };
                     let (battery, battery_percent) = match c.read() {
                         Ok((t, p)) => {
                             c.last = t.clone();
+                            c.percent = Some(p);
                             (Some(t), Some(p))
                         }
                         Err(_) => {
@@ -483,11 +733,14 @@ impl Monitor {
                     out.push(Update::Added {
                         sel: c.sel(),
                         name: c.product.clone(),
-                        protocol: (0, 0),
+                        protocol: c.protocol(),
                         battery,
                         battery_percent,
                     });
-                    self.cent.push(c);
+                    if !c.off {
+                        c.restore_lights(out);
+                    }
+                    self.polled.push(c);
                 }
                 Err(e) => out.push(Update::Line(format!("! {pid:04x}  {product}  cannot open: {e}"))),
             }
@@ -507,7 +760,7 @@ impl Monitor {
 
     /// Read the current state of one device.
     pub fn snapshot(&mut self, sel: &str) -> Result<Snapshot, Error> {
-        if let Some(c) = self.cent.iter_mut().find(|c| c.sel() == sel) {
+        if let Some(c) = self.polled.iter_mut().find(|c| c.sel() == sel) {
             return Ok(c.snapshot());
         }
         let (l, i) = self.find(sel)?;
@@ -564,16 +817,19 @@ impl Monitor {
             mode,
             model,
             preset,
+            headset: None,
         })
     }
 
     /// Run a GUI command against one device, then return its fresh state.
     pub fn exec(&mut self, sel: &str, cmd: Cmd) -> Result<Snapshot, Error> {
-        if self.cent.iter().any(|c| c.sel() == sel) {
-            return match cmd {
-                Cmd::Refresh => self.snapshot(sel),
-                _ => Err(Error::Other("this headset supports battery reading only so far".into())),
-            };
+        if let Some(p) = self.polled.iter_mut().find(|c| c.sel() == sel) {
+            if matches!(cmd, Cmd::Refresh) {
+                return Ok(p.snapshot());
+            }
+            // a change: only what was set is read back; the rest comes from the cache
+            p.apply(&cmd)?;
+            return Ok(p.cached());
         }
         {
             let (l, i) = self.find(sel)?;
@@ -603,6 +859,9 @@ impl Monitor {
                 }
                 Cmd::SetMode(m) => {
                     device::set_mode_verified(&mut l.h, i, *m)?;
+                }
+                Cmd::SetLights(_) | Cmd::SetAutoOff(_) => {
+                    return Err(Error::Other("only Corsair headsets have this setting".into()));
                 }
                 Cmd::SavePreset { dpi, rate } => {
                     let model = device::model_id(&mut l.h, i)?;
@@ -801,7 +1060,7 @@ fn attach(l: &mut Live, index: u8, out: &mut Vec<Update>) {
     out.push(Update::Added {
         sel,
         name,
-        protocol,
+        protocol: Protocol::Hidpp(protocol.0, protocol.1),
         battery,
         battery_percent,
     });
@@ -985,7 +1244,7 @@ mod tests {
                 Update::Added {
                     sel: "c54d:1".into(),
                     name: "PRO X 2".into(),
-                    protocol: (4, 2),
+                    protocol: Protocol::Hidpp(4, 2),
                     battery: Some("54% level=good discharging external=none".into()),
                     battery_percent: Some(54),
                 },
@@ -995,7 +1254,7 @@ mod tests {
                 Update::Added {
                     sel: "0af7".into(),
                     name: "PRO X 2 LIGHTSPEED".into(),
-                    protocol: (0, 0),
+                    protocol: Protocol::Centurion,
                     battery: Some("93% discharging".into()),
                     battery_percent: Some(93),
                 },
@@ -1003,9 +1262,19 @@ mod tests {
             ),
             (
                 Update::Added {
+                    sel: "1b1c:0a73".into(),
+                    name: "CORSAIR HS80 RGB Wireless Gaming Receiver".into(),
+                    protocol: Protocol::Corsair,
+                    battery: Some("31% discharging (3657 mV)".into()),
+                    battery_percent: Some(31),
+                },
+                "+ 1b1c:0a73 CORSAIR HS80 RGB Wireless Gaming Receiver  (Corsair headset)  battery 31% discharging (3657 mV)",
+            ),
+            (
+                Update::Added {
                     sel: "0aba".into(),
                     name: "H".into(),
-                    protocol: (4, 2),
+                    protocol: Protocol::Hidpp(4, 2),
                     battery: None,
                     battery_percent: None,
                 },

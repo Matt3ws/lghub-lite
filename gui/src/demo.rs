@@ -1,7 +1,8 @@
-//! `--demo`: shows the design's two sample devices without touching any hardware, for
+//! `--demo`: shows sample devices (the design's two, plus a Corsair headset) without touching any hardware, for
 //! screenshots and for comparing the widget with the design. Extra flags open parts of it:
 //! `--demo-select N`, `--demo-drawer`, `--demo-skins`, `--demo-skin ID`.
 
+use lghub_lite::corsair::Settings;
 use lghub_lite::device::{Dpi, DpiCaps, MODE_HOST};
 use lghub_lite::watch::Snapshot;
 
@@ -77,6 +78,17 @@ impl Options {
                 alerted: false,
                 demo: Some(["≈ 9 h left", "−4.1% / h", "Discharging"]),
             },
+            Row {
+                sel: "1b1c:0a73".into(),
+                name: "CORSAIR HS80 RGB Wireless Gaming Receiver".into(),
+                battery: Some("31% discharging (3657 mV)".into()),
+                percent: Some(31),
+                online: true,
+                protocol: None,
+                history: hourly(&headset[8..]),
+                alerted: false,
+                demo: Some(["≈ 6 h left", "−4.8% / h", "Discharging"]),
+            },
         ];
         let base = |sel: &str, name: &str| Snapshot {
             sel: sel.into(),
@@ -93,6 +105,7 @@ impl Options {
             mode: None,
             model: None,
             preset: None,
+            headset: None,
         };
         app.demo = Some(vec![
             Snapshot {
@@ -124,8 +137,19 @@ impl Options {
                 model: Some(0x0aba),
                 ..base("0aba", "PRO X Wireless Headset")
             },
+            Snapshot {
+                battery: Some("31% discharging (3657 mV)".into()),
+                battery_percent: Some(31),
+                headset: Some(Settings {
+                    brightness: Some(330),
+                    sleep_on: Some(true),
+                    sleep_ms: Some(900_000),
+                    mic_muted: Some(false),
+                }),
+                ..base("1b1c:0a73", "CORSAIR HS80 RGB Wireless Gaming Receiver")
+            },
         ]);
-        let sel = app.rows[self.select.min(1)].sel.clone();
+        let sel = app.rows[self.select.min(app.rows.len() - 1)].sel.clone();
         app.select(sel);
         app.dpi_input = "800".into();
         app.drawer = self.drawer;
