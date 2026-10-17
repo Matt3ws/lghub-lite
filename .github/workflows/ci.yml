@@ -32,6 +32,13 @@ jobs:
       - name: Release package (the Release workflow's script, so packaging breaks show here)
         shell: pwsh
         run: ./packaging/package-windows.ps1 -Version ci
+      # Downloadable test build of every push (Actions run page → Artifacts), for testing a
+      # branch on hardware without a release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lghub-lite-windows-x64-${{ github.sha }}
+          path: lghub-lite-ci-windows-x64/
+          retention-days: 14
 
   linux:
     # Experimental platform: built, linted and unit-tested here; no Linux hardware tests.
@@ -58,9 +65,33 @@ jobs:
           timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo
           code=$?
           # still running after 15 s (killed by timeout, 124) = started and kept rendering
+          echo "exit code $code"; [ "$code" -eq 124 ] || exit 1
+          # again with the Corsair headset's settings drawer open
+          timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo --demo-select 3 --demo-drawer
+          code=$?
           echo "exit code $code"; [ "$code" -eq 124 ]
       - name: Release package (the Release workflow's script, so packaging breaks show here)
         run: sh packaging/package-linux.sh ci
+
+  macos:
+    # Tested on hardware (MX Master 4 over Bluetooth) by hand; here built, linted and tested.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: gui
+      - run: cargo test
+        working-directory: gui
+      - run: cargo build --release
+        working-directory: gui
+      - name: Release package (the Release workflow's script, so packaging breaks show here)
+        run: sh packaging/package-macos.sh ci
 
   msrv:
     # The core's rust-version (CLI + background watcher) must really build.

@@ -4,7 +4,8 @@ use std::time::Duration;
 use lghub_lite::device::parse_selector;
 use lghub_lite::hidpp::{self, DIRECT, Error, Hidpp};
 use lghub_lite::{
-    LOGITECH_VID, audio, autostart, battery, centurion, config, device, hid, platform, profiles, verbose, watch,
+    CORSAIR_VID, LOGITECH_VID, audio, autostart, battery, centurion, config, corsair, device, hid, platform, profiles,
+    verbose, watch,
 };
 
 const USAGE: &str = "\
@@ -32,14 +33,19 @@ usage: lghub-lite [--trace] [--verbose] [--swid N] [--config FILE] <command>
   rate <dev> [hz]          read report rate, or set it and read it back
   mode <dev> [host|onboard] read or set onboard-profile mode (host mode allows DPI/rate writes)
   raw <dev> <hex...>       send one raw report, print replies (needs --allow-raw)
-  collections              list every Logitech HID collection (debug)
+  collections              list every Logitech and Corsair HID collection (debug)
   report                   everything needed to diagnose a device that does not work, in one
                            go (collections, devices, info and battery of each, with traces of
                            any step that fails); send the output with a device report
 
 <dev> is PID[:INDEX] as printed by `devices`, e.g. c54d:1 (receiver slot 1) or 0aba.
+Corsair headsets (experimental) are 1b1c:PID, e.g. 1b1c:0a73. For them also:
+  lights <dev> [on|off]     headset LEDs on or off
+  autooff <dev> [MIN|off]   switch off after MIN idle minutes
+  mic <dev>                 mic muted or on (read-only: the headset decides)
 Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\lghub-lite,
-Linux: ~/.config/lghub-lite) unless --config is given.";
+Linux: ~/.config/lghub-lite, macOS: ~/Library/Application Support/lghub-lite) unless
+--config is given.";
 
 struct Opts {
     trace: bool,
@@ -117,6 +123,16 @@ fn main() {
         }
         ["collections"] => collections(),
         ["report"] => report(&opts),
+        ["info", d] if corsair::parse_selector(d).is_some() => {
+            corsair_for(d).and_then(|c| corsair_probe(&c, opts.trace, false))
+        }
+        ["battery", d] if corsair::parse_selector(d).is_some() => corsair_for(d)
+            .and_then(|c| corsair::Corsair::open(&c, opts.trace))
+            .and_then(|mut h| h.battery())
+            .map(|b| println!("{b}")),
+        ["lights", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::Lights, rest.first()),
+        ["autooff", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::AutoOff, rest.first()),
+        ["mic", d] => corsair_setting(&opts, d, Setting::Mic, None),
         ["info", d] => match centurion_for(d) {
             Some(c) => centurion_probe(&c, opts.trace, false),
             None => with_dev(&opts, d, info),
@@ -249,20 +265,23 @@ fn apply(h: &mut Hidpp, dev: u8, path: &std::path::Path) -> Result<(), Error> {
 }
 
 fn collections() -> Result<(), Error> {
-    let list = hid::enumerate(LOGITECH_VID).map_err(|e| Error::Io(e.to_string()))?;
-    for i in list {
-        println!(
-            "{:04x}:{:04x} page={:04x} usage={:04x} in={:>2} out={:>2} hidpp={} {:?}\n    {}",
-            i.vid,
-            i.pid,
-            i.usage_page,
-            i.usage,
-            i.in_len,
-            i.out_len,
-            device::is_hidpp(&i),
-            i.product,
-            i.path
-        );
+    for vid in [LOGITECH_VID, CORSAIR_VID] {
+        let list = hid::enumerate(vid).map_err(|e| Error::Io(e.to_string()))?;
+        for i in list {
+            let proto = if device::is_hidpp(&i) {
+                "hidpp"
+            } else if centurion::is_centurion(&i) {
+                "centurion"
+            } else if corsair::is_corsair(&i) {
+                "bragi"
+            } else {
+                "-"
+            };
+            println!(
+                "{:04x}:{:04x} page={:04x} usage={:04x} in={:>2} out={:>2} feat={:>2} proto={proto} {:?}\n    {}",
+                i.vid, i.pid, i.usage_page, i.usage, i.in_len, i.out_len, i.feat_len, i.product, i.path
+            );
+        }
     }
     Ok(())
 }
@@ -278,7 +297,7 @@ fn report(o: &Opts) -> Result<(), Error> {
     println!("time       {}", watch::now());
     let section = |t: &str| println!("\n--- {t} ---");
 
-    section("HID collections (every Logitech one, as the OS reports them)");
+    section("HID collections (every Logitech and Corsair one, as the OS reports them)");
     if let Err(e) = collections() {
         println!("error: {e}");
     }
@@ -348,6 +367,12 @@ fn report(o: &Opts) -> Result<(), Error> {
             println!("error: {e}");
         }
     }
+    for (pid, product, info) in corsair::interfaces() {
+        section(&format!("corsair {} {product}", corsair::selector(pid)));
+        if let Err(e) = corsair_probe(&info, false, true) {
+            println!("error: {e}");
+        }
+    }
     section("end of report");
     Ok(())
 }
@@ -394,17 +419,125 @@ fn centurion_probe(info: &hid::Info, trace: bool, retrace: bool) -> Result<(), E
     Ok(())
 }
 
+/// The Corsair Bragi collection for a `1b1c:PID` selector.
+fn corsair_for(sel: &str) -> Result<hid::Info, Error> {
+    let pid = corsair::parse_selector(sel).ok_or_else(|| Error::Other(format!("not a Corsair selector: {sel}")))?;
+    corsair::interfaces()
+        .into_iter()
+        .find(|c| c.0 == pid)
+        .map(|c| c.2)
+        .ok_or_else(|| Error::Other(format!("no Corsair headset {sel} (run `devices`)")))
+}
+
+#[derive(Clone, Copy)]
+enum Setting {
+    Lights,
+    AutoOff,
+    Mic,
+}
+
+/// `lights` / `autooff` / `mic`: show a Corsair headset setting, or set it and show the result.
+fn corsair_setting(o: &Opts, sel: &str, what: Setting, value: Option<&&str>) -> Result<(), Error> {
+    let mut c = corsair::Corsair::open(&corsair_for(sel)?, o.trace)?;
+    if let Some(v) = value {
+        let bad = |hint: &str| Error::Other(format!("value must be {hint}"));
+        match what {
+            Setting::Lights => {
+                let on = match *v {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err(bad("on or off")),
+                };
+                c.set_lights(on)?;
+                // so the watcher and the app switch them off again when the headset comes back
+                let pid = corsair::parse_selector(sel).unwrap_or_default();
+                corsair::remember_lights(&o.curve_dir()?, pid, on).map_err(Error::Other)?;
+            }
+            Setting::AutoOff => {
+                let min: u32 = match *v {
+                    "off" => 0,
+                    v => v
+                        .parse()
+                        .ok()
+                        .filter(|m| (1..=240).contains(m))
+                        .ok_or_else(|| bad("minutes 1-240 or off"))?,
+                };
+                c.set_auto_off(min)?;
+            }
+            // [HW] the headset refuses a mute set; only its boom or button changes it
+            Setting::Mic => return Err(Error::Other("the mic can only be muted on the headset".into())),
+        }
+    }
+    let s = c.settings()?;
+    let na = || "not supported".to_string();
+    let text = match what {
+        Setting::Lights => s.brightness.map(|b| if b == 0 { "off" } else { "on" }.to_string()),
+        Setting::AutoOff => s.auto_off_minutes().map(|m| match m {
+            0 => "off".to_string(),
+            m => format!("after {m} min idle"),
+        }),
+        Setting::Mic => s.mic_muted.map(|m| if m { "muted" } else { "on" }.to_string()),
+    };
+    println!("{}", text.unwrap_or_else(na));
+    Ok(())
+}
+
+/// The known properties of a Corsair dongle and headset, then the battery, each read separately
+/// so one failure does not hide the rest. `retrace`: repeat failing reads traced.
+fn corsair_probe(info: &hid::Info, trace: bool, retrace: bool) -> Result<(), Error> {
+    let mut c = corsair::Corsair::open(info, trace)?;
+    let step =
+        |c: &mut corsair::Corsair, what: &str, f: &dyn Fn(&mut corsair::Corsair) -> Result<String, Error>| match f(c) {
+            Ok(v) => println!("{what:<20} {v}"),
+            Err(Error::NoFeature(_)) => println!("{what:<20} not present"),
+            Err(e) => {
+                println!("{what:<20} error: {e}");
+                if retrace && !c.trace {
+                    println!("(repeating with --trace)");
+                    c.trace = true;
+                    if let Err(e) = f(c) {
+                        println!("{what:<20} error: {e}");
+                    }
+                    c.trace = false;
+                }
+            }
+        };
+    println!("protocol             Corsair Bragi (experimental, read-only)");
+    for (target, p, name) in corsair::KNOWN {
+        step(&mut c, name, &|c| {
+            c.get(target, p).map(|v| match p {
+                corsair::prop::PID => format!("{v:04x}"),
+                corsair::prop::FIRMWARE => corsair::firmware_text(v),
+                _ => v.to_string(),
+            })
+        });
+    }
+    step(&mut c, "battery", &|c| c.battery().map(|b| b.to_string()));
+    Ok(())
+}
+
 fn devices(o: &Opts) -> Result<(), Error> {
     let ifs = device::interfaces()?;
     let cent: Vec<_> = centurion::interfaces()
         .into_iter()
         .filter(|c| !ifs.iter().any(|f| f.pid == c.0))
         .collect();
-    if ifs.is_empty() && cent.is_empty() {
-        println!("no Logitech HID++ interfaces found");
+    let cors = corsair::interfaces();
+    if ifs.is_empty() && cent.is_empty() && cors.is_empty() {
+        println!("no Logitech HID++ or Corsair headset interfaces found");
     }
     for (pid, product, _) in &cent {
         println!("{pid:04x}      {product}  (Centurion headset, experimental: battery only)");
+    }
+    for (pid, product, info) in &cors {
+        let state = match corsair::Corsair::open(info, o.trace).and_then(|mut c| c.battery()) {
+            Ok(b) => format!("battery {b}"),
+            Err(e) => format!("headset not answering: {e}"),
+        };
+        println!(
+            "{}  {product}  (Corsair headset, experimental: battery, lights, auto-off; {state})",
+            corsair::selector(*pid)
+        );
     }
     for f in &ifs {
         let mut h = match Hidpp::open(&f.cols, o.swid, o.trace) {
@@ -417,7 +550,12 @@ fn devices(o: &Opts) -> Result<(), Error> {
         match h.ping(DIRECT, 0x5A) {
             Ok((maj, min)) => {
                 let name = device::name(&mut h, DIRECT).unwrap_or_else(|_| f.product.clone());
-                println!("{:04x}      {name}  (HID++ {maj}.{min}, direct)", f.pid);
+                let link = if device::is_bluetooth_pid(f.pid) {
+                    "bluetooth"
+                } else {
+                    "direct"
+                };
+                println!("{:04x}      {name}  (HID++ {maj}.{min}, {link})", f.pid);
             }
             Err(Error::Hpp10(_)) => {
                 // HID++ 1.0 answer to a 2.0 ping: this is a receiver. [OBS §9.6]

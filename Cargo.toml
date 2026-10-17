@@ -3,14 +3,14 @@
 
 [package]
 name = "lghub-lite"
-version = "0.2.3"
+version = "0.4.2"
 edition = "2024"
 rust-version = "1.88"
 description = "Tiny CLI for Logitech HID++ mice and headsets: DPI, report rate, battery, presets. Not affiliated with or endorsed by Logitech."
 license = "MIT"
 repository = "https://github.com/Skyttehehe/lghub-lite"
 readme = "README.md"
-keywords = ["logitech", "hidpp", "mouse", "dpi", "windows"]
+keywords = ["logitech", "hidpp", "mouse", "dpi", "macos"]
 categories = ["command-line-utilities", "hardware-support"]
 
 [[bin]]
@@ -39,6 +39,9 @@ windows-sys = { version = "0.61.2", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2" # poll, eventfd, netlink, flock, dup2, localtime_r, kill
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2" # poll, pipe, flock, dup2, localtime_r, kill, proc_listallpids (IOKit is linked directly)
 
 [profile.release]
 opt-level = "s"

@@ -103,6 +103,7 @@ fn query(path: &str) -> io::Result<Info> {
         usage: caps.Usage,
         in_len: caps.InputReportByteLength,
         out_len: caps.OutputReportByteLength,
+        feat_len: caps.FeatureReportByteLength,
         product,
         iface: group_key(path),
     })
@@ -214,7 +215,12 @@ pub struct Handle {
 
 impl Handle {
     pub fn open(info: &Info) -> io::Result<Handle> {
-        let h = open_raw(&info.path, GENERIC_READ | GENERIC_WRITE)?;
+        // An input-only collection (no output reports, e.g. Corsair's event collection) may
+        // refuse write access; reading is all it is opened for.
+        let h = match open_raw(&info.path, GENERIC_READ | GENERIC_WRITE) {
+            Err(_) if info.out_len == 0 => open_raw(&info.path, GENERIC_READ)?,
+            r => r?,
+        };
         let ev = new_event()?;
         let mut ov: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         ov.hEvent = ev.0;

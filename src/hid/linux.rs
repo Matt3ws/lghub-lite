@@ -97,6 +97,7 @@ pub fn enumerate(vid: u16) -> io::Result<Vec<Info>> {
                 usage: c.usage,
                 in_len: c.in_len,
                 out_len: c.out_len,
+                feat_len: c.feat_len,
                 product: product.clone(),
                 iface: dev.display().to_string(),
             });

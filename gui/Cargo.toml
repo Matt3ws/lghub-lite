@@ -1,6 +1,6 @@
 [package]
 name = "lghub-lite-gui"
-version = "0.2.3"
+version = "0.4.2"
 edition = "2024"
 rust-version = "1.95" # eframe 0.37
 description = "Window + tray front end for lghub-lite. Not affiliated with or endorsed by Logitech."
@@ -24,6 +24,9 @@ raw-window-handle = "0.6" # already part of eframe; gives the HWND for the borde
 # X11 and Wayland window support, and a StatusNotifierItem tray over D-Bus (no GTK)
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = "0.26" # a menu bar item
 
 [target.'cfg(windows)'.dependencies]
 tray-icon = "0.26"

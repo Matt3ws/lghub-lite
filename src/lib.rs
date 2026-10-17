@@ -1,4 +1,4 @@
-//! lghub-lite: talks HID++ directly to Logitech mice and headsets (Windows; Linux experimental).
+//! lghub-lite: talks HID++ directly to Logitech mice and headsets (Windows, macOS; Linux experimental).
 //! Shared by the `lghub-lite` CLI and the windowless `lghub-lite-bg` watcher.
 //! Not affiliated with or endorsed by Logitech. Protocol evidence: NOTES.md.
 
@@ -7,6 +7,7 @@ pub mod autostart;
 pub mod battery;
 pub mod centurion;
 pub mod config;
+pub mod corsair;
 pub mod device;
 pub mod hid;
 pub mod hidpp;
@@ -29,3 +30,4 @@ pub fn verbose(args: std::fmt::Arguments) {
 }
 
 pub const LOGITECH_VID: u16 = 0x046D;
+pub const CORSAIR_VID: u16 = 0x1B1C;
