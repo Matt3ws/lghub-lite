@@ -3,7 +3,8 @@
 //! macOS: a per-user LaunchAgent.
 //!
 //! API (both OSes): `enable(command)`, `disable()`, `status()`, `start(command)`,
-//! `stop_running(exe_name)`. `command` is a command line with quoted paths.
+//! `stop_running(exe_name)`. `command` is a command line with quoted paths. `status_of(id)`
+//! and `disable_of(id)` reach the entry from before the rename, `OLD_ID`.
 
 #[cfg(target_os = "linux")]
 mod linux;

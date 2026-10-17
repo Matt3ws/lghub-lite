@@ -17,7 +17,7 @@ pub fn local_time_text() -> String {
     format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}")
 }
 
-/// `lghub-lite-bg` → `lghub-lite-bg.exe` on Windows, unchanged elsewhere.
+/// `peripheral-lite-bg` → `peripheral-lite-bg.exe` on Windows, unchanged elsewhere.
 pub fn exe(base: &str) -> String {
     format!("{base}{}", std::env::consts::EXE_SUFFIX)
 }

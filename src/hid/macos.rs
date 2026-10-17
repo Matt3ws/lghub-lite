@@ -1,7 +1,7 @@
 //! macOS HID backend: IOHIDManager to enumerate, IOHIDDevice to talk to a device, the raw
 //! report descriptor for the collection layout (the same parser as Linux).
 //!
-//! IOKit delivers input reports as callbacks on a CFRunLoop, while the rest of lghub-lite
+//! IOKit delivers input reports as callbacks on a CFRunLoop, while the rest of peripheral-lite
 //! waits on several devices at once. So every open device gets a small thread running its own
 //! run loop; the callback queues the report and writes a byte to a pipe, and `wait_any` is the
 //! same `poll(2)` loop as on Linux, over those pipes. Hot-plug works the same way: an
@@ -453,7 +453,7 @@ impl Handle {
         let stop = Arc::new(AtomicBool::new(false));
         let ctx = SendPtr(Arc::as_ptr(&shared) as *mut c_void);
         let keep = shared.clone();
-        let spawned = run_loop_thread("lghub-lite hid", stop.clone(), move |rl| {
+        let spawned = run_loop_thread("peripheral-lite hid", stop.clone(), move |rl| {
             let (d, ctx) = (dev, ctx); // whole SendPtrs, not their raw-pointer fields
             let mut buf = vec![0u8; IN_MAX].into_boxed_slice();
             // SAFETY: buf and `keep` (behind ctx) outlive the registration: both are moved
@@ -661,10 +661,10 @@ impl Notifier {
     pub fn hid() -> io::Result<Notifier> {
         let (r, w) = pipe()?;
         let stop = Arc::new(AtomicBool::new(false));
-        let (rl, t) = run_loop_thread("lghub-lite hotplug", stop.clone(), move |rl| {
+        let (rl, t) = run_loop_thread("peripheral-lite hotplug", stop.clone(), move |rl| {
             let w = Box::new(w);
             let ctx = &*w as *const OwnedFd as *mut c_void;
-            // One manager per vendor lghub-lite talks to (Logitech, Corsair), sharing the callback.
+            // One manager per vendor peripheral-lite talks to (Logitech, Corsair), sharing the callback.
             // SAFETY: the managers are owned by the cleanup closure; `w` outlives the callbacks.
             let ms: Vec<SendPtr> = [crate::LOGITECH_VID, crate::CORSAIR_VID]
                 .into_iter()

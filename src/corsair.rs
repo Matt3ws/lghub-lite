@@ -76,7 +76,7 @@ pub mod prop {
     pub const MIC_MUTED: u8 = 0xA6;
 }
 
-/// Headset properties lghub-lite may set, with their allowed range. Brightness [HW, owner saw the
+/// Headset properties peripheral-lite may set, with their allowed range. Brightness [HW, owner saw the
 /// LEDs follow]; the others are added here only once confirmed on hardware.
 pub const WRITABLE: [(u8, u32, u32); 3] = [
     (prop::BRIGHTNESS, 0, 1000),
@@ -201,7 +201,7 @@ pub struct Corsair {
     pub trace: bool,
     pub timeout: Duration,
     /// Taken around each request. Every open handle sees every reply, and replies do not say
-    /// which property they answer, so two lghub-lite processes asking at once (the app and the
+    /// which property they answer, so two peripheral-lite processes asking at once (the app and the
     /// background watcher) could take each other's answers. [HW: the app's polls showed up in
     /// another process's reads]
     turn: Option<crate::platform::SharedLock>,
@@ -240,7 +240,7 @@ impl Corsair {
         {
             self.turn = turn;
             return Err(Error::Other(
-                "headset busy (another lghub-lite is talking to it)".into(),
+                "headset busy (another peripheral-lite is talking to it)".into(),
             ));
         }
         let r = self.exchange(f);
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn the_lights_choice_is_remembered_per_headset() {
-        let dir = std::env::temp_dir().join(format!("lghub-lite-corsair-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("peripheral-lite-corsair-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!lights_off_wanted(&dir, 0x0A73));
         remember_lights(&dir, 0x0A73, false).unwrap();

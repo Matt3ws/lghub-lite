@@ -1,22 +1,22 @@
 [package]
-name = "lghub-lite-gui"
+name = "peripheral-lite-gui"
 version = "0.4.3"
 edition = "2024"
 rust-version = "1.95" # eframe 0.37
-description = "Window + tray front end for lghub-lite. Not affiliated with or endorsed by Logitech."
+description = "Window + tray front end for peripheral-lite. Not affiliated with or endorsed by Logitech."
 license = "MIT"
-repository = "https://github.com/Skyttehehe/lghub-lite"
+repository = "https://github.com/Skyttehehe/peripheral-lite"
 publish = false
 
 # A project of its own, not part of the root: the CLI builds without it, and gui/ can be deleted.
 [workspace]
 
 [[bin]]
-name = "lghub-lite-gui"
+name = "peripheral-lite-gui"
 path = "src/main.rs"
 
 [dependencies]
-lghub-lite = { path = ".." }
+peripheral-lite = { path = ".." }
 eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
 raw-window-handle = "0.6" # already part of eframe; gives the HWND for the borderless fix
 

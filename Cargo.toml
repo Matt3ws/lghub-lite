@@ -2,24 +2,24 @@
 # root stays a CLI-only project with a single dependency, and deleting gui/ changes nothing here.
 
 [package]
-name = "lghub-lite"
+name = "peripheral-lite"
 version = "0.4.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Tiny CLI for Logitech HID++ mice and headsets: DPI, report rate, battery, presets. Not affiliated with or endorsed by Logitech."
 license = "MIT"
-repository = "https://github.com/Skyttehehe/lghub-lite"
+repository = "https://github.com/Skyttehehe/peripheral-lite"
 readme = "README.md"
 keywords = ["logitech", "hidpp", "mouse", "dpi", "macos"]
 categories = ["command-line-utilities", "hardware-support"]
 
 [[bin]]
-name = "lghub-lite"
+name = "peripheral-lite"
 path = "src/main.rs"
 
-# Windowless `watch` for login autostart; logs to %APPDATA%\lghub-lite\watch.log.
+# Windowless `watch` for login autostart; logs to %APPDATA%\peripheral-lite\watch.log.
 [[bin]]
-name = "lghub-lite-bg"
+name = "peripheral-lite-bg"
 path = "src/bin/bg.rs"
 
 [target.'cfg(windows)'.dependencies]
@@ -27,7 +27,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Devices_HumanInterfaceDevice",
     "Win32_Devices_DeviceAndDriverInstallation",
-    "Win32_Media_Audio",              # waveOut: lghub-lite's own headset tones
+    "Win32_Media_Audio",              # waveOut: peripheral-lite's own headset tones
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Threading",

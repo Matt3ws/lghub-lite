@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>lghub-lite</string>
+	<string>peripheral-lite</string>
 	<key>CFBundleDisplayName</key>
-	<string>lghub-lite</string>
+	<string>peripheral-lite</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.lghub-lite</string>
+	<string>io.github.peripheral-lite</string>
 	<key>CFBundleExecutable</key>
-	<string>lghub-lite-gui</string>
+	<string>peripheral-lite-gui</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

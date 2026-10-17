@@ -1,4 +1,4 @@
-//! lghub-lite's own headset tones, made here (no sound files).
+//! peripheral-lite's own headset tones, made here (no sound files).
 //!
 //! A Corsair headset held in software mode (lights fully off, see `Corsair::set_lights`) no
 //! longer plays its mute and low-battery prompts: they are recordings the firmware plays only in

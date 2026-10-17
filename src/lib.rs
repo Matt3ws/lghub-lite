@@ -1,5 +1,5 @@
-//! lghub-lite: talks HID++ directly to Logitech mice and headsets (Windows, macOS; Linux experimental).
-//! Shared by the `lghub-lite` CLI and the windowless `lghub-lite-bg` watcher.
+//! peripheral-lite: talks HID++ directly to Logitech mice and headsets (Windows, macOS; Linux experimental).
+//! Shared by the `peripheral-lite` CLI and the windowless `peripheral-lite-bg` watcher.
 //! Not affiliated with or endorsed by Logitech. Protocol evidence: NOTES.md.
 
 pub mod audio;
@@ -11,6 +11,7 @@ pub mod corsair;
 pub mod device;
 pub mod hid;
 pub mod hidpp;
+pub mod migrate;
 pub mod platform;
 pub mod profiles;
 pub mod sound;
@@ -29,6 +30,11 @@ pub fn verbose(args: std::fmt::Arguments) {
         eprintln!("{args}");
     }
 }
+
+/// The project's name: settings folder, login entry, lock and mutex names.
+pub const NAME: &str = "peripheral-lite";
+/// The name up to v0.4.3; `migrate` moves what was kept under it.
+pub const OLD_NAME: &str = "lghub-lite";
 
 pub const LOGITECH_VID: u16 = 0x046D;
 pub const CORSAIR_VID: u16 = 0x1B1C;

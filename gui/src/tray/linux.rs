@@ -28,7 +28,7 @@ impl Sni {
 
 impl ksni::Tray for Sni {
     fn id(&self) -> String {
-        "lghub-lite".into()
+        "peripheral-lite".into()
     }
 
     fn title(&self) -> String {

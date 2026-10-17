@@ -15,7 +15,11 @@ const REPO_URL: &str = env!("CARGO_PKG_REPOSITORY");
 pub const CAN_INSTALL: bool = cfg!(windows);
 /// The files an update replaces, as packaged by packaging/package-windows.ps1.
 #[cfg(windows)]
-const EXES: [&str; 3] = ["lghub-lite-gui.exe", "lghub-lite.exe", "lghub-lite-bg.exe"];
+const EXES: [&str; 3] = [
+    "peripheral-lite-gui.exe",
+    "peripheral-lite.exe",
+    "peripheral-lite-bg.exe",
+];
 
 #[derive(Clone, Debug)]
 pub struct Release {
@@ -62,7 +66,7 @@ pub fn check() -> Result<Option<Release>, String> {
 /// `install_dir()`). The caller restarts the app.
 #[cfg(windows)]
 pub fn install(r: &Release, dir: &Path) -> Result<(), String> {
-    let name = format!("lghub-lite-{}-windows-x64", r.tag);
+    let name = format!("peripheral-lite-{}-windows-x64", r.tag);
     let url = format!("{REPO_URL}/releases/download/{}/{name}.zip", r.tag);
     let work = work_dir();
     let _ = std::fs::remove_dir_all(&work);
@@ -142,11 +146,11 @@ pub fn install_dir() -> Result<PathBuf, String> {
 
 /// Open the release page in the browser (the file manager's opener also takes URLs).
 pub fn open_page(r: &Release) {
-    lghub_lite::platform::open_folder(Path::new(&r.page()));
+    peripheral_lite::platform::open_folder(Path::new(&r.page()));
 }
 
 fn work_dir() -> PathBuf {
-    std::env::temp_dir().join("lghub-lite-update")
+    std::env::temp_dir().join("peripheral-lite-update")
 }
 
 /// A program from System32 on Windows (not whatever `curl.exe` is first in PATH), without a
@@ -168,7 +172,10 @@ fn system_tool(name: &str) -> Command {
 fn curl() -> Command {
     let mut c = system_tool("curl");
     c.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "300"])
-        .args(["--user-agent", concat!("lghub-lite-gui/", env!("CARGO_PKG_VERSION"))]);
+        .args([
+            "--user-agent",
+            concat!("peripheral-lite-gui/", env!("CARGO_PKG_VERSION")),
+        ]);
     c
 }
 
@@ -284,13 +291,14 @@ mod tests {
         );
     }
 
-    /// Talks to GitHub: `cargo test -- --ignored`.
+    /// Talks to GitHub: `cargo test -- --ignored`. Needs a release published under the
+    /// peripheral-lite name (v0.4.2 and v0.4.3 only have lghub-lite assets): change the tag below.
     #[test]
     #[ignore]
     #[cfg(windows)]
     fn check_and_install_from_github() {
         assert!(check().is_ok());
-        let dir = std::env::temp_dir().join("lghub-lite-update-test");
+        let dir = std::env::temp_dir().join("peripheral-lite-update-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(EXES[0]), b"old").unwrap();

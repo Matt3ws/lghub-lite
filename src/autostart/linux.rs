@@ -1,24 +1,31 @@
-//! Login autostart via an XDG autostart entry, `~/.config/autostart/lghub-lite.desktop`
+//! Login autostart via an XDG autostart entry, `~/.config/autostart/peripheral-lite.desktop`
 //! (honoured by GNOME, KDE, XFCE, Cinnamon, MATE, LXQt). Only touched when the user runs
-//! `lghub-lite autostart on|off` or ticks Tray in the app.
+//! `peripheral-lite autostart on|off` or ticks Tray in the app.
 //! [INF] Written without Linux hardware; covered by unit tests and CI only.
 
 use std::io;
 use std::path::PathBuf;
 
+/// The entry's file name (without `.desktop`) up to v0.4.3.
+pub const OLD_ID: &str = crate::OLD_NAME;
+
 fn entry_path() -> io::Result<PathBuf> {
+    entry_path_of(crate::NAME)
+}
+
+fn entry_path_of(id: &str) -> io::Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
-    Ok(base.join("autostart").join("lghub-lite.desktop"))
+    Ok(base.join("autostart").join(format!("{id}.desktop")))
 }
 
 /// The .desktop file for `command` (a command line with double-quoted paths).
 fn entry(command: &str) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nName=lghub-lite\nComment=Logitech HID++ battery and settings (lghub-lite)\nExec={command}\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
+        "[Desktop Entry]\nType=Application\nName=peripheral-lite\nComment=Logitech HID++ battery and settings (peripheral-lite)\nExec={command}\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n"
     )
 }
 
@@ -31,7 +38,12 @@ pub fn enable(command: &str) -> io::Result<()> {
 }
 
 pub fn disable() -> io::Result<()> {
-    match std::fs::remove_file(entry_path()?) {
+    disable_of(crate::NAME)
+}
+
+/// Remove the entry `id`; succeeds if it was not there.
+pub fn disable_of(id: &str) -> io::Result<()> {
+    match std::fs::remove_file(entry_path_of(id)?) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
     }
@@ -39,7 +51,12 @@ pub fn disable() -> io::Result<()> {
 
 /// The registered command line, if any.
 pub fn status() -> io::Result<Option<String>> {
-    match std::fs::read_to_string(entry_path()?) {
+    status_of(crate::NAME)
+}
+
+/// The command line in entry `id`, if any.
+pub fn status_of(id: &str) -> io::Result<Option<String>> {
+    match std::fs::read_to_string(entry_path_of(id)?) {
         Ok(text) => Ok(text.lines().find_map(|l| l.strip_prefix("Exec=")).map(str::to_string)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
@@ -87,7 +104,7 @@ mod tests {
 
     #[test]
     fn desktop_entry() {
-        let e = entry(r#""/x/lghub-lite-gui" --tray"#);
-        assert!(e.contains("\nExec=\"/x/lghub-lite-gui\" --tray\n"));
+        let e = entry(r#""/x/peripheral-lite-gui" --tray"#);
+        assert!(e.contains("\nExec=\"/x/peripheral-lite-gui\" --tray\n"));
     }
 }

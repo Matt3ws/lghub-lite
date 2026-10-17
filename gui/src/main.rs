@@ -1,11 +1,11 @@
-//! lghub-lite-gui: a small skinnable battery widget + tray front end over the lghub-lite library.
+//! peripheral-lite-gui: a small skinnable battery widget + tray front end over the peripheral-lite library.
 //! Not affiliated with or endorsed by Logitech.
 //!
 //! Threads: the UI thread runs eframe; one worker thread owns the `watch::Monitor` and does all
 //! HID I/O (requests can block for seconds while a wireless device wakes up), so the UI never
 //! blocks. Commands go UI -> worker over a channel plus `hid::Waker`; updates come back over a
 //! channel plus `request_repaint`. While the window is hidden nothing is repainted and the
-//! worker sleeps in the same WaitForMultipleObjects as `lghub-lite watch`.
+//! worker sleeps in the same WaitForMultipleObjects as `peripheral-lite watch`.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod demo;
@@ -27,13 +27,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use history::History;
-use lghub_lite::device::{Event, MODE_ONBOARD};
-use lghub_lite::hid::Waker;
-use lghub_lite::watch::{Cmd, Monitor, Snapshot, Update};
-use lghub_lite::{autostart, battery, config, hidpp, platform};
+use peripheral_lite::device::{Event, MODE_ONBOARD};
+use peripheral_lite::hid::Waker;
+use peripheral_lite::watch::{Cmd, Monitor, Snapshot, Update};
+use peripheral_lite::{autostart, battery, config, hidpp, migrate, platform};
 use skin::{Settings, Skin};
 
-const TITLE: &str = "lghub-lite";
+const TITLE: &str = "peripheral-lite";
 /// Messages under the controls disappear after this long.
 const MESSAGE_TIME: Duration = Duration::from_secs(8);
 
@@ -164,6 +164,12 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("presets.txt"));
 
     let demo = demo::Options::parse(&args);
+    // before the instance lock: an old lghub-lite app still running is stopped here
+    let migrated = if demo.is_none() {
+        migrate::run("gui")
+    } else {
+        Vec::new()
+    };
     // One app per session; the lock is held until the process exits.
     let _instance = match demo {
         Some(_) => None,
@@ -184,8 +190,8 @@ fn main() {
     let (w, h, rgba) = (big, big, icons::app(big, None));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(if demo.is_some() { "lghub-lite demo" } else { TITLE })
-            .with_app_id("lghub-lite") // matches packaging/linux/lghub-lite.desktop
+            .with_title(if demo.is_some() { "peripheral-lite demo" } else { TITLE })
+            .with_app_id("peripheral-lite") // matches packaging/linux/peripheral-lite.desktop
             .with_inner_size([view::WIDGET_W, 420.0])
             .with_resizable(false)
             .with_decorations(false)
@@ -204,6 +210,9 @@ fn main() {
         options,
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, bg_running, demo.is_some());
+            if !migrated.is_empty() {
+                app.say(false, migrated.join("; "));
+            }
             if let Some(d) = demo {
                 d.apply(&mut app);
             }
@@ -242,7 +251,7 @@ impl App {
         }
         // demo mode keeps its settings and skins away from the real ones
         let dir = if demo {
-            std::env::temp_dir().join("lghub-lite-demo")
+            std::env::temp_dir().join("peripheral-lite-demo")
         } else {
             cfg.parent().map(PathBuf::from).unwrap_or_default()
         };
@@ -265,7 +274,7 @@ impl App {
         let autostart_gui = autostart::status()
             .ok()
             .flatten()
-            .is_some_and(|c| c.contains("lghub-lite-gui"));
+            .is_some_and(|c| c.contains("peripheral-lite-gui"));
         let mut skins = skin::builtins();
         skins.extend(skin::load_custom(&dir.join("skins")));
         let settings = Settings::load(&dir.join("app.txt"));
@@ -349,7 +358,7 @@ impl App {
             .filter(|s| s.sel == sel)
             .and_then(|s| s.headset.as_mut())
         {
-            use lghub_lite::corsair::prop;
+            use peripheral_lite::corsair::prop;
             *h = match cmd {
                 Cmd::SetLights(on) => h.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 }),
                 Cmd::SetAutoOff(0) => h.with(prop::SLEEP_ENABLED as u16, 0),
@@ -596,7 +605,7 @@ impl App {
             autostart::enable(&format!("\"{}\" --tray", exe.display())).and_then(|_| {
                 // The GUI now takes over from the background watcher.
                 if self.bg_running {
-                    autostart::stop_running(&platform::exe("lghub-lite-bg"))?;
+                    autostart::stop_running(&platform::exe("peripheral-lite-bg"))?;
                     self.bg_running = false;
                     let _ = self.tx.send(ToWorker::ApplyPresets(true));
                     self.waker.wake();
@@ -657,7 +666,10 @@ impl App {
         match msg {
             UpdateMsg::Checked(Ok(None)) => {
                 self.update = UpdateState::Idle;
-                self.say(false, format!("lghub-lite v{} is the newest version", update::CURRENT));
+                self.say(
+                    false,
+                    format!("peripheral-lite v{} is the newest version", update::CURRENT),
+                );
             }
             UpdateMsg::Checked(Ok(Some(r))) => {
                 let how = if update::CAN_INSTALL {
@@ -682,7 +694,10 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
                 Err(e) => {
-                    self.say(true, format!("{} installed; restart lghub-lite to use it ({e})", r.tag));
+                    self.say(
+                        true,
+                        format!("{} installed; restart peripheral-lite to use it ({e})", r.tag),
+                    );
                     self.update = UpdateState::Idle;
                 }
             },
@@ -693,11 +708,14 @@ impl App {
     fn restart(&mut self) -> std::io::Result<()> {
         let dir = update::install_dir().map_err(std::io::Error::other)?;
         if self.bg_running {
-            let bg = platform::exe("lghub-lite-bg");
+            let bg = platform::exe("peripheral-lite-bg");
             autostart::stop_running(&bg)?;
             autostart::start(&format!("\"{}\"", dir.join(&bg).display()))?;
         }
-        let mut cmd = format!("\"{}\" --updated", dir.join(platform::exe("lghub-lite-gui")).display());
+        let mut cmd = format!(
+            "\"{}\" --updated",
+            dir.join(platform::exe("peripheral-lite-gui")).display()
+        );
         for a in std::env::args().skip(1).filter(|a| a != "--tray" && a != "--updated") {
             cmd += &format!(" \"{a}\"");
         }

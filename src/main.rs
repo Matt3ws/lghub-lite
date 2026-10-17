@@ -1,23 +1,23 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lghub_lite::device::parse_selector;
-use lghub_lite::hidpp::{self, DIRECT, Error, Hidpp};
-use lghub_lite::{
+use peripheral_lite::device::parse_selector;
+use peripheral_lite::hidpp::{self, DIRECT, Error, Hidpp};
+use peripheral_lite::{
     CORSAIR_VID, LOGITECH_VID, audio, autostart, battery, centurion, config, corsair, device, hid, platform, profiles,
     verbose, watch,
 };
 
 const USAGE: &str = "\
-lghub-lite: control Logitech HID++ mice and headsets without G HUB.
+peripheral-lite: control Logitech HID++ mice and headsets without G HUB.
 Not affiliated with or endorsed by Logitech.
 
-usage: lghub-lite [--trace] [--verbose] [--swid N] [--config FILE] <command>
+usage: peripheral-lite [--trace] [--verbose] [--swid N] [--config FILE] <command>
 
   devices                  list HID++ devices, including those behind receivers
   watch                    print plug/unplug, receiver connect/disconnect and setting events;
                            applies presets whenever a device connects
-  autostart [on|off]       run the background watcher (lghub-lite-bg) at login, or stop it
+  autostart [on|off]       run the background watcher (peripheral-lite-bg) at login, or stop it
   presets                  show the preset file
   preset <dev> [dpi=N] [rate=HZ] | clear
                            save (or remove) the preset for this device's model
@@ -44,10 +44,10 @@ Corsair headsets (experimental) are 1b1c:PID, e.g. 1b1c:0a73. For them also:
   autooff <dev> [MIN|off]   switch off after MIN idle minutes
   mic <dev>                 mic muted or on (read-only: the headset decides)
   sound <dev> <mute|unmute|low|verylow>
-                            play lghub-lite's own tone on the headset (Windows); with the
+                            play peripheral-lite's own tone on the headset (Windows); with the
                             lights off the headset is silent, so the watcher plays these
-Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\lghub-lite,
-Linux: ~/.config/lghub-lite, macOS: ~/Library/Application Support/lghub-lite) unless
+Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\peripheral-lite,
+Linux: ~/.config/peripheral-lite, macOS: ~/Library/Application Support/peripheral-lite) unless
 --config is given.";
 
 struct Opts {
@@ -83,7 +83,7 @@ fn main() {
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--verbose" | "-v" => lghub_lite::set_verbose(true),
+            "--verbose" | "-v" => peripheral_lite::set_verbose(true),
             "--trace" => opts.trace = true,
             "--allow-raw" => opts.allow_raw = true,
             "--swid" => match it
@@ -100,6 +100,9 @@ fn main() {
             },
             _ => args.push(a),
         }
+    }
+    for m in peripheral_lite::migrate::run("cli") {
+        eprintln!("{m}");
     }
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     let r = match a.as_slice() {
@@ -294,8 +297,8 @@ fn collections() -> Result<(), Error> {
 /// fail; a failing step is repeated with --trace so the HID++ exchange is in the report.
 /// Contains device names, IDs and HID layout only (no personal data).
 fn report(o: &Opts) -> Result<(), Error> {
-    lghub_lite::set_verbose(true);
-    println!("=== lghub-lite report ===");
+    peripheral_lite::set_verbose(true);
+    println!("=== peripheral-lite report ===");
     println!("version    {}", env!("CARGO_PKG_VERSION"));
     println!("system     {} {}", std::env::consts::OS, std::env::consts::ARCH);
     println!("time       {}", watch::now());
@@ -435,16 +438,16 @@ fn corsair_for(sel: &str) -> Result<hid::Info, Error> {
 
 /// `sound`: play one of the tones the watcher plays while the lights are off.
 fn play_tone(sel: &str, tone: &str) -> Result<(), Error> {
-    let t = lghub_lite::sound::Tone::parse(tone)
+    let t = peripheral_lite::sound::Tone::parse(tone)
         .ok_or_else(|| Error::Other("tone must be mute, unmute, low or verylow".into()))?;
     let info = corsair_for(sel)?;
-    match lghub_lite::sound::play(t, &info.product) {
+    match peripheral_lite::sound::play(t, &info.product) {
         Ok(output) => {
             println!("played on {output}");
             Ok(())
         }
         Err(e) => {
-            let outputs = lghub_lite::platform::audio_outputs();
+            let outputs = peripheral_lite::platform::audio_outputs();
             for (id, name) in &outputs {
                 eprintln!("  output {id}: {name}");
             }
@@ -689,7 +692,10 @@ fn dpi(h: &mut Hidpp, dev: u8, set: Option<u16>) -> Result<(), Error> {
         println!("profiles   mode {m} ({})", device::mode_name(m));
     }
     let Some(v) = set else { return Ok(()) };
-    println!("old={}  (restore with: lghub-lite dpi <dev> {})", d.current, d.current);
+    println!(
+        "old={}  (restore with: peripheral-lite dpi <dev> {})",
+        d.current, d.current
+    );
     let after = device::set_dpi_verified(h, dev, v).map_err(cli_hint)?;
     println!("new={v} readback={after}");
     Ok(())
@@ -723,7 +729,7 @@ fn rate(h: &mut Hidpp, dev: u8, set: Option<u32>) -> Result<(), Error> {
     }
     let Some(hz) = set else { return Ok(()) };
     let old = device::rate_hz(r.current);
-    println!("old={old}  (restore with: lghub-lite rate <dev> {old})");
+    println!("old={old}  (restore with: peripheral-lite rate <dev> {old})");
     let after = device::set_rate_verified(h, dev, hz).map_err(cli_hint)?;
     println!("new={hz} readback={after}");
     Ok(())
@@ -831,7 +837,7 @@ fn battery(h: &mut Hidpp, dev: u8, curve_dir: &std::path::Path) -> Result<(), Er
     let line = audio::battery_text(h, dev, curve_dir)?;
     println!("{line}");
     if line.starts_with('≈') {
-        println!("hint       this is a generic estimate; see `lghub-lite curve <dev>` for a measured one");
+        println!("hint       this is a generic estimate; see `peripheral-lite curve <dev>` for a measured one");
     }
     Ok(())
 }
@@ -864,16 +870,19 @@ fn curve(h: &mut Hidpp, dev: u8, dir: &std::path::Path, build: bool) -> Result<(
     Ok(())
 }
 
-/// `autostart [on|off]`: the per-user login entry for lghub-lite-bg (status when no arg).
+/// `autostart [on|off]`: the per-user login entry for peripheral-lite-bg (status when no arg).
 fn autostart_cmd(o: &Opts, set: Option<bool>) -> Result<(), Error> {
     let bg = std::env::current_exe()
         .map_err(|e| Error::Io(e.to_string()))?
-        .with_file_name(platform::exe("lghub-lite-bg"));
+        .with_file_name(platform::exe("peripheral-lite-bg"));
     match set {
         None => {}
         Some(true) => {
             if !bg.exists() {
-                return Err(Error::Other(format!("{} not found next to lghub-lite", bg.display())));
+                return Err(Error::Other(format!(
+                    "{} not found next to peripheral-lite",
+                    bg.display()
+                )));
             }
             let mut cmd = format!("\"{}\"", bg.display());
             if let Some(c) = &o.config {
@@ -886,7 +895,8 @@ fn autostart_cmd(o: &Opts, set: Option<bool>) -> Result<(), Error> {
         }
         Some(false) => {
             autostart::disable().map_err(|e| Error::Io(e.to_string()))?;
-            let n = autostart::stop_running(&platform::exe("lghub-lite-bg")).map_err(|e| Error::Io(e.to_string()))?;
+            let n =
+                autostart::stop_running(&platform::exe("peripheral-lite-bg")).map_err(|e| Error::Io(e.to_string()))?;
             println!("autostart  off (stopped {n} running watcher(s))");
         }
     }
