@@ -3,7 +3,7 @@
 
 [package]
 name = "lghub-lite"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Tiny CLI for Logitech HID++ mice and headsets: DPI, report rate, battery, presets. Not affiliated with or endorsed by Logitech."
@@ -27,6 +27,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Devices_HumanInterfaceDevice",
     "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Media_Audio",              # waveOut: lghub-lite's own headset tones
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Threading",

@@ -13,6 +13,7 @@ pub mod hid;
 pub mod hidpp;
 pub mod platform;
 pub mod profiles;
+pub mod sound;
 pub mod watch;
 
 use std::sync::atomic::{AtomicBool, Ordering};
