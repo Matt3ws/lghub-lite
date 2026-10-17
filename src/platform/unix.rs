@@ -140,6 +140,15 @@ pub fn open_folder(dir: &Path) {
     let _ = std::process::Command::new(opener).arg(dir).spawn();
 }
 
+/// Audio outputs: none yet, the headset tones are Windows-only so far.
+pub fn audio_outputs() -> Vec<(u32, String)> {
+    Vec::new()
+}
+
+pub fn play_pcm(_id: u32, _rate: u32, _samples: &[i16]) -> Result<(), String> {
+    Err("playing sounds is Windows-only so far".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

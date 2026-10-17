@@ -22,6 +22,7 @@ use crate::corsair::{self, Corsair};
 use crate::device::{self, Dpi, EVENT_FEATURES, Event};
 use crate::hid::{self, Notifier, Signal, Wake, Waker};
 use crate::hidpp::{self, DIRECT, Error, GET_REGISTER, Hidpp};
+use crate::sound::{self, Tone};
 
 /// Local wall-clock time for log lines, e.g. `2026-10-15 22:31:02`.
 pub fn now() -> String {
@@ -276,6 +277,10 @@ struct Polled {
     /// The owner switched the lights off (`corsair::lights_off_wanted`); applied again whenever
     /// the headset comes back.
     lights_off: bool,
+    /// Held while this process is the one that plays the headset's tones (`Polled::tone`).
+    sounds: Option<crate::platform::InstanceLock>,
+    /// Battery warning already played (`sound::battery_warning`).
+    battery_warned: u8,
 }
 
 impl Polled {
@@ -323,6 +328,9 @@ impl Polled {
             p if p == corsair::prop::BATTERY as u16 || p == corsair::prop::BATTERY_STATE as u16 => self.poll(out),
             p if n.target == corsair::HEADSET && corsair::Settings::covers(p) => {
                 let s = self.settings.unwrap_or_default().with(p, n.value);
+                if let Some(t) = sound::mic_tone(self.settings.and_then(|s| s.mic_muted), s.mic_muted) {
+                    self.tone(t, out);
+                }
                 if self.settings != Some(s) {
                     self.settings = Some(s);
                     out.push(Update::Headset {
@@ -360,6 +368,35 @@ impl Polled {
         }
     }
 
+    /// Play one of lghub-lite's own tones in place of the headset's, which stays silent while
+    /// its lights are off (software mode, see `sound`). The app and the watcher both see every
+    /// event, so only the process holding the "sounds" lock plays them.
+    fn tone(&mut self, t: Tone, out: &mut Vec<Update>) {
+        let sel = self.sel();
+        if !self.lights_off {
+            return crate::verbose(format_args!("{sel}: {t:?} tone: lights on, the headset plays its own"));
+        }
+        if self.sounds.is_none() {
+            self.sounds = crate::platform::instance_lock(&format!("sounds-{:04x}", self.pid));
+        }
+        if self.sounds.is_none() {
+            return crate::verbose(format_args!("{sel}: {t:?} tone: another lghub-lite plays them"));
+        }
+        let Some((id, name)) = sound::output_for(&self.product, &crate::platform::audio_outputs()) else {
+            out.push(Update::Line(format!("  {sel:<8} no audio output for its tones")));
+            return;
+        };
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let r = crate::platform::play_pcm(id, sound::RATE, &sound::samples(t));
+            let ms = start.elapsed().as_millis();
+            match r {
+                Ok(()) => crate::verbose(format_args!("{sel}: {t:?} tone played on {name} ({ms} ms)")),
+                Err(e) => crate::verbose(format_args!("{sel}: {t:?} tone: {e}")),
+            }
+        });
+    }
+
     /// Timer read: report changes, and offline/online transitions.
     fn poll(&mut self, out: &mut Vec<Update>) {
         match self.read() {
@@ -368,6 +405,9 @@ impl Polled {
                     self.restore_lights(out);
                 }
                 self.percent = Some(pct);
+                if let Some(t) = sound::battery_warning(pct, &mut self.battery_warned) {
+                    self.tone(t, out);
+                }
                 if text != self.last {
                     self.last = text.clone();
                     out.push(Update::Battery {
@@ -718,11 +758,15 @@ impl Monitor {
                         settings: None,
                         lights_off: protocol == Protocol::Corsair && corsair::lights_off_wanted(&dir, pid),
                         dir: dir.clone(),
+                        sounds: None,
+                        battery_warned: 0,
                     };
                     let (battery, battery_percent) = match c.read() {
                         Ok((t, p)) => {
                             c.last = t.clone();
                             c.percent = Some(p);
+                            // no warning for a battery already low when lghub-lite starts
+                            sound::battery_warning(p, &mut c.battery_warned);
                             (Some(t), Some(p))
                         }
                         Err(_) => {
