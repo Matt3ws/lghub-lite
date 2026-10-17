@@ -164,10 +164,10 @@ mod tests {
     use super::*;
 
     /// Writes the generated icons (raw RGBA) for a byte-for-byte check against the design's
-    /// PNGs, when LGHUB_LITE_ICON_DUMP names a folder (see NOTES.md).
+    /// PNGs, when PERIPHERAL_LITE_ICON_DUMP names a folder (see NOTES.md).
     #[test]
     fn dump_for_comparison() {
-        let Ok(dir) = std::env::var("LGHUB_LITE_ICON_DUMP") else {
+        let Ok(dir) = std::env::var("PERIPHERAL_LITE_ICON_DUMP") else {
             return;
         };
         let ok = |pct| Some(Level { pct, low: false });

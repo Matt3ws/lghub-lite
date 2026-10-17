@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::Color32;
-use lghub_lite::config::write_atomic;
+use peripheral_lite::config::write_atomic;
 
 /// Colour slots, in the order the editor shows them: (JSON key, label).
 pub const FIELDS: [(&str, &str); 11] = [
@@ -371,7 +371,7 @@ impl Settings {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let mut out = String::from("# lghub-lite app settings\n");
+        let mut out = String::from("# peripheral-lite app settings\n");
         if !self.skin.is_empty() {
             out.push_str(&format!("skin {}\n", self.skin));
         }
@@ -432,7 +432,7 @@ mod tests {
         };
         st.set_alert("c54d:1", 20);
         st.set_alert("c54d:1", 25);
-        let p = std::env::temp_dir().join(format!("lghub-lite-app-{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("peripheral-lite-app-{}.txt", std::process::id()));
         st.save(&p).unwrap();
         assert_eq!(Settings::load(&p), st);
         std::fs::remove_file(&p).unwrap();

@@ -8,8 +8,8 @@ use eframe::egui::{
     pos2, vec2,
 };
 use eframe::epaint::Shadow;
-use lghub_lite::device::{MODE_HOST, MODE_ONBOARD, is_bluetooth_pid};
-use lghub_lite::watch::Cmd;
+use peripheral_lite::device::{MODE_HOST, MODE_ONBOARD, is_bluetooth_pid};
+use peripheral_lite::watch::Cmd;
 
 use crate::fonts::{GROTESK, MONO, MONO_SEMIBOLD, PIXEL, SANS, SANS_MEDIUM, SANS_SEMIBOLD, font};
 use crate::history::{self, BARS};
@@ -271,7 +271,7 @@ impl App {
             .and_then(|s| self.rows.iter().find(|r| &r.sel == s));
         let Some(r) = row else {
             return Cur {
-                name: "lghub-lite".into(),
+                name: "peripheral-lite".into(),
                 conn: String::new(),
                 pct: None,
                 alert: 20,
@@ -294,7 +294,7 @@ impl App {
         let pct = r.percent.filter(|_| r.online);
         let charging = r.charging();
         let drain = r.history.drain_tenths(now).filter(|_| !charging);
-        let corsair = lghub_lite::corsair::parse_selector(&r.sel).is_some();
+        let corsair = peripheral_lite::corsair::parse_selector(&r.sel).is_some();
         let conn = match r.sel.split_once(':') {
             _ if corsair => "Corsair wireless dongle".into(),
             Some((_, slot)) => format!("Receiver · slot {slot}"),
@@ -443,7 +443,7 @@ impl App {
             &p,
             at(31.0, 21.5),
             Align2::LEFT_CENTER,
-            "lghub-lite",
+            "peripheral-lite",
             SANS_SEMIBOLD,
             12.0,
             k.c(INK),
@@ -1039,7 +1039,7 @@ impl App {
             } else if label.starts_with("your") {
                 "measured on this headset"
             } else {
-                "from the curve file in the lghub-lite folder"
+                "from the curve file in the peripheral-lite folder"
             };
             let cy = d.center().y;
             text(
@@ -1084,7 +1084,7 @@ impl App {
                         "Import from G HUB" => import = ghub.clone(),
                         "Open folder" => {
                             let _ = std::fs::create_dir_all(&self.dir);
-                            lghub_lite::platform::open_folder(&self.dir);
+                            peripheral_lite::platform::open_folder(&self.dir);
                         }
                         _ => {}
                     }
@@ -1102,7 +1102,7 @@ impl App {
             self.send(&sel, c);
         }
         if let Some(src) = import {
-            match lghub_lite::battery::import_curve(&src, &self.dir) {
+            match peripheral_lite::battery::import_curve(&src, &self.dir) {
                 Ok(dest) => {
                     self.say(false, format!("Imported {}", dest.display()));
                     self.ghub_curve = None;
@@ -1317,7 +1317,7 @@ impl App {
             }
             let name = format!("{}.skin.json", skin::slug(&out.name));
             if let Some(path) = os::skin_file_dialog(true, &name) {
-                self.skin_msg = Some(match lghub_lite::config::write_atomic(&path, &out.to_json()) {
+                self.skin_msg = Some(match peripheral_lite::config::write_atomic(&path, &out.to_json()) {
                     Ok(()) => (
                         true,
                         format!("Exported {}", path.file_name().unwrap_or_default().to_string_lossy()),

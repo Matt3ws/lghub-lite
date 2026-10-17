@@ -1634,26 +1634,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lghub-lite"
-version = "0.4.3"
-dependencies = [
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "lghub-lite-gui"
-version = "0.4.3"
-dependencies = [
- "eframe",
- "ksni",
- "lghub-lite",
- "raw-window-handle",
- "tray-icon",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2353,6 +2333,26 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "peripheral-lite"
+version = "0.4.4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "peripheral-lite-gui"
+version = "0.4.4"
+dependencies = [
+ "eframe",
+ "ksni",
+ "peripheral-lite",
+ "raw-window-handle",
+ "tray-icon",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "petgraph"

@@ -1,6 +1,6 @@
 # Fonts
 
-Bundled into `lghub-lite-gui.exe` so the app matches its design. All are under the SIL Open
+Bundled into `peripheral-lite-gui.exe` so the app matches its design. All are under the SIL Open
 Font License 1.1; each licence text is next to its fonts.
 
 | File | Font | Licence |

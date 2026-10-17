@@ -18,9 +18,9 @@ pub struct Preset {
     pub rate: Option<u32>,
 }
 
-/// `presets.txt` in the settings folder: `%APPDATA%\lghub-lite` on Windows,
-/// `$XDG_CONFIG_HOME/lghub-lite` (or `~/.config/lghub-lite`) on Linux,
-/// `~/Library/Application Support/lghub-lite` on macOS.
+/// `presets.txt` in the settings folder: `%APPDATA%\peripheral-lite` on Windows,
+/// `$XDG_CONFIG_HOME/peripheral-lite` (or `~/.config/peripheral-lite`) on Linux,
+/// `~/Library/Application Support/peripheral-lite` on macOS.
 pub fn default_path() -> Option<PathBuf> {
     crate::platform::config_dir().map(|d| d.join("presets.txt"))
 }
@@ -82,8 +82,9 @@ pub fn line(p: &Preset) -> String {
 }
 
 pub fn format(presets: &[Preset]) -> String {
-    let mut s =
-        String::from("# lghub-lite presets: <model id> [dpi=N] [rate=Hz]\n# Rewritten by `lghub-lite preset`.\n");
+    let mut s = String::from(
+        "# peripheral-lite presets: <model id> [dpi=N] [rate=Hz]\n# Rewritten by `peripheral-lite preset`.\n",
+    );
     for p in presets {
         s.push_str(&line(p));
         s.push('\n');
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn save_is_atomic_and_round_trips() {
-        let dir = std::env::temp_dir().join(format!("lghub-lite-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("peripheral-lite-test-{}", std::process::id()));
         let path = dir.join("presets.txt");
         let p = vec![Preset {
             model: 0x40A9,

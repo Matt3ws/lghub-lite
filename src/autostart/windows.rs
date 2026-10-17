@@ -1,5 +1,5 @@
 //! Per-user login autostart via the standard `HKCU\...\CurrentVersion\Run` registry value.
-//! Only touched when the user runs `lghub-lite autostart on|off`.
+//! Only touched when the user runs `peripheral-lite autostart on|off`.
 
 use std::io;
 use std::ptr::null_mut;
@@ -17,7 +17,9 @@ use windows_sys::Win32::System::Threading::{
 };
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const VALUE: &str = "lghub-lite";
+const VALUE: &str = crate::NAME;
+/// The Run value up to v0.4.3.
+pub const OLD_ID: &str = crate::OLD_NAME;
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -49,7 +51,12 @@ pub fn enable(command: &str) -> io::Result<()> {
 
 /// Remove the login entry; succeeds if it was not there.
 pub fn disable() -> io::Result<()> {
-    let (key, name) = (wide(RUN_KEY), wide(VALUE));
+    disable_of(VALUE)
+}
+
+/// Remove the Run value `id`; succeeds if it was not there.
+pub fn disable_of(id: &str) -> io::Result<()> {
+    let (key, name) = (wide(RUN_KEY), wide(id));
     // SAFETY: NUL-terminated strings.
     match unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) } {
         ERROR_FILE_NOT_FOUND => Ok(()),
@@ -125,7 +132,12 @@ pub fn stop_running(exe_name: &str) -> io::Result<u32> {
 
 /// The registered command, if any.
 pub fn status() -> io::Result<Option<String>> {
-    let (key, name) = (wide(RUN_KEY), wide(VALUE));
+    status_of(VALUE)
+}
+
+/// The command in Run value `id`, if any.
+pub fn status_of(id: &str) -> io::Result<Option<String>> {
+    let (key, name) = (wide(RUN_KEY), wide(id));
     let mut buf = [0u16; 1024];
     let mut len = (buf.len() * 2) as u32;
     // SAFETY: buffer and its byte length are valid; RRF_RT_REG_SZ guarantees termination.

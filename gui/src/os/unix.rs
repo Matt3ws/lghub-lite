@@ -14,7 +14,7 @@ fn socket_path() -> Option<PathBuf> {
         "XDG_RUNTIME_DIR"
     };
     let dir = std::env::var_os(runtime).map(PathBuf::from)?;
-    Some(dir.join("lghub-lite-gui.sock"))
+    Some(dir.join("peripheral-lite-gui.sock"))
 }
 
 /// A second launch: ask the running app to show its window.

@@ -4,11 +4,11 @@
 # Release.
 set -eu
 version="$1"
-name="lghub-lite-$version-linux-x64-experimental"
+name="peripheral-lite-$version-linux-x64-experimental"
 rm -rf "$name"
 mkdir -p "$name/fonts"
-cp target/release/lghub-lite target/release/lghub-lite-bg gui/target/release/lghub-lite-gui "$name/"
-cp -r packaging/linux/70-lghub-lite.rules packaging/linux/lghub-lite.desktop packaging/linux/icons "$name/"
+cp target/release/peripheral-lite target/release/peripheral-lite-bg gui/target/release/peripheral-lite-gui "$name/"
+cp -r packaging/linux/70-peripheral-lite.rules packaging/linux/peripheral-lite.desktop packaging/linux/icons "$name/"
 cp packaging/linux/INSTALL-linux.md README.md LICENSE "$name/"
 cp gui/fonts/*.txt gui/fonts/README.md "$name/fonts/"
 tar czf "$name.tar.gz" "$name"

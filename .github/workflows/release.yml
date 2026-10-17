@@ -27,7 +27,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: lghub-lite-*-windows-x64.zip*
+          path: peripheral-lite-*-windows-x64.zip*
 
   linux:
     # Experimental: built and unit-tested here, not tested on Linux hardware.
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: lghub-lite-*-linux-x64-experimental.tar.gz*
+          path: peripheral-lite-*-linux-x64-experimental.tar.gz*
 
   macos:
     runs-on: macos-latest
@@ -64,7 +64,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: lghub-lite-*-macos-*.tar.gz*
+          path: peripheral-lite-*-macos-*.tar.gz*
 
   publish:
     needs: [windows, linux, macos]
@@ -77,6 +77,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" lghub-lite-* \
+          gh release create "${{ github.ref_name }}" peripheral-lite-* \
             --repo "${{ github.repository }}" \
-            --title "lghub-lite ${{ github.ref_name }}" --generate-notes --prerelease
+            --title "peripheral-lite ${{ github.ref_name }}" --generate-notes --prerelease

@@ -35,7 +35,7 @@ macro_rules! say {
 }
 
 /// Something that happened, as data. `Display` gives the CLI's `watch` line.
-/// How lghub-lite talks to a device.
+/// How peripheral-lite talks to a device.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Protocol {
     /// HID++ (major, minor).
@@ -368,7 +368,7 @@ impl Polled {
         }
     }
 
-    /// Play one of lghub-lite's own tones in place of the headset's, which stays silent while
+    /// Play one of peripheral-lite's own tones in place of the headset's, which stays silent while
     /// its lights are off (software mode, see `sound`). The app and the watcher both see every
     /// event, so only the process holding the "sounds" lock plays them.
     fn tone(&mut self, t: Tone, out: &mut Vec<Update>) {
@@ -380,7 +380,7 @@ impl Polled {
             self.sounds = crate::platform::instance_lock(&format!("sounds-{:04x}", self.pid));
         }
         if self.sounds.is_none() {
-            return crate::verbose(format_args!("{sel}: {t:?} tone: another lghub-lite plays them"));
+            return crate::verbose(format_args!("{sel}: {t:?} tone: another peripheral-lite plays them"));
         }
         let Some((id, name)) = sound::output_for(&self.product, &crate::platform::audio_outputs()) else {
             out.push(Update::Line(format!("  {sel:<8} no audio output for its tones")));
@@ -544,7 +544,7 @@ impl Monitor {
     }
 
     /// Turn automatic preset application on attach on or off (on by default). The GUI turns it
-    /// off while `lghub-lite-bg` is running, so only one process applies presets.
+    /// off while `peripheral-lite-bg` is running, so only one process applies presets.
     pub fn set_apply_presets(&mut self, on: bool) {
         self.apply_presets = on;
         for l in self.live.iter_mut() {
@@ -765,7 +765,7 @@ impl Monitor {
                         Ok((t, p)) => {
                             c.last = t.clone();
                             c.percent = Some(p);
-                            // no warning for a battery already low when lghub-lite starts
+                            // no warning for a battery already low when peripheral-lite starts
                             sound::battery_warning(p, &mut c.battery_warned);
                             (Some(t), Some(p))
                         }

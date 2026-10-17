@@ -2,7 +2,7 @@
 //! descriptor, `poll(2)` to wait on devices, an eventfd waker and a netlink uevent socket for
 //! hot-plug. [INF] Written without Linux hardware; covered by unit tests and CI only.
 //!
-//! Access: /dev/hidraw* is root-only by default; packaging/linux/70-lghub-lite.rules gives the
+//! Access: /dev/hidraw* is root-only by default; packaging/linux/70-peripheral-lite.rules gives the
 //! logged-in user access to Logitech nodes (`TAG+="uaccess"`).
 
 use std::fs::{File, OpenOptions};

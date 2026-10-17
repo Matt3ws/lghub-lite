@@ -1,4 +1,4 @@
-# lghub-lite — engineering log
+# peripheral-lite — engineering log
 
 Minimal Rust CLI that talks HID++ directly to Logitech hardware on Windows. No G HUB dependency at runtime.
 Not affiliated with or endorsed by Logitech. User-facing documentation is in [README.md](README.md); this file is the developer's engineering log.
@@ -30,11 +30,11 @@ Tags: `[OBS]` seen in G HUB, `[PUB]` public HID++ knowledge (Solaar/libratbag), 
 | `rate <dev> [hz]` | ✅ 0x8061 read/write with read-back in host mode, over the cable and the receiver. The Hz mapping is [PUB] and unmeasured |
 | `mode <dev> [host\|onboard]` | ✅ 0x8100 get/set with read-back, over the cable and the receiver |
 | `watch` | ✅ event-driven monitor: device arrival/removal, receiver slot connect/disconnect (incl. sleep/wake), DPI/rate/battery events. Headset battery (0x1F20) is read every 5 min and printed only when the % changes, the one timer in the program (see Headset). Idle CPU 0, one thread between reads. Human-run hot-plug test passed (TEST REQUEST 5) |
-| `preset <dev> [dpi=N] [rate=HZ] \| clear`, `presets`, `apply <dev>` | ✅ per-model presets in `%APPDATA%\lghub-lite\presets.txt` (`--config` overrides). `apply` and `watch` switch to host mode and set DPI/rate with read-back (SL2 over the receiver) |
-| `profiles <dev>`, `dump <dev> <file>` | ✅ read-only 0x8100 onboard memory: info, active profile, user/factory directories, per-sector CRC status, full text backup (atomic write). Nothing is written to the device. SL2 backup saved at `%APPDATA%\lghub-lite\onboard-backup-40a9-2026-10-15.txt` |
-| `autostart [on\|off]` | ✅ per-user login entry (HKCU `Run` value `lghub-lite`) for `lghub-lite-bg.exe`; `on` also starts it, `off` also stops it [HW: on → running, second copy exits, log written; off → entry removed, process ended] |
-| `lghub-lite-bg.exe` | ✅ windowless `watch` (single instance via the `Local\lghub-lite-bg` mutex), output with timestamps in `watch.log` next to the preset file, moved to `watch.log.old` at start-up once over 1 MB |
-| `lghub-lite-gui.exe` | ✅ (Windows) egui window + tray, in the separate `gui/` package. [HW]: lists the SL2 and headset with battery (headset bar 73 %); close hides to the tray; hidden idle 0 ms CPU over 20 s; a second launch re-shows the window and exits. Redesigned 2026-10-16 as a skinnable undecorated widget (display, segment gauge, 24 h history from `history-<device>.csv`, alert level, settings drawer, skin manager with `.json` skins); [HW] renders both devices, 0 ms CPU idle over 15 s. Clicking through it still needs a human test (TEST REQUEST 10); the same `Monitor::exec` code is hardware-verified via the CLI |
+| `preset <dev> [dpi=N] [rate=HZ] \| clear`, `presets`, `apply <dev>` | ✅ per-model presets in `%APPDATA%\peripheral-lite\presets.txt` (`--config` overrides). `apply` and `watch` switch to host mode and set DPI/rate with read-back (SL2 over the receiver) |
+| `profiles <dev>`, `dump <dev> <file>` | ✅ read-only 0x8100 onboard memory: info, active profile, user/factory directories, per-sector CRC status, full text backup (atomic write). Nothing is written to the device. SL2 backup saved at `%APPDATA%\peripheral-lite\onboard-backup-40a9-2026-10-15.txt` |
+| `autostart [on\|off]` | ✅ per-user login entry (HKCU `Run` value `peripheral-lite`) for `peripheral-lite-bg.exe`; `on` also starts it, `off` also stops it [HW: on → running, second copy exits, log written; off → entry removed, process ended] |
+| `peripheral-lite-bg.exe` | ✅ windowless `watch` (single instance via the `Local\peripheral-lite-bg` mutex), output with timestamps in `watch.log` next to the preset file, moved to `watch.log.old` at start-up once over 1 MB |
+| `peripheral-lite-gui.exe` | ✅ (Windows) egui window + tray, in the separate `gui/` package. [HW]: lists the SL2 and headset with battery (headset bar 73 %); close hides to the tray; hidden idle 0 ms CPU over 20 s; a second launch re-shows the window and exits. Redesigned 2026-10-16 as a skinnable undecorated widget (display, segment gauge, 24 h history from `history-<device>.csv`, alert level, settings drawer, skin manager with `.json` skins); [HW] renders both devices, 0 ms CPU idle over 15 s. Clicking through it still needs a human test (TEST REQUEST 10); the same `Monitor::exec` code is hardware-verified via the CLI |
 | sidetone | ❌ removed: 0x8300 level reads and writes back, but a human heard no effect at 50 (2026-10-15). Facts are kept in §2 Headset |
 | `raw <dev> <hex…> --allow-raw` | implemented, debug only |
 | `--trace` | prints every sent/received report in hex; reports that don't match the pending request are marked `(ignored)` |
@@ -46,8 +46,8 @@ Tags: `[OBS]` seen in G HUB, `[PUB]` public HID++ knowledge (Solaar/libratbag), 
 ### Architecture
 A Cargo workspace: the core package (one library plus two thin binaries; no traits, no async) and a separate `gui/` package, so the core's dependency tree stays `windows-sys` only:
 - `src/lib.rs`: module list, `verbose`, the Logitech VID.
-- `src/main.rs`: the `lghub-lite` CLI (argument parsing and output).
-- `src/bin/bg.rs`: `lghub-lite-bg`, the windowless watcher. Built with `windows_subsystem = "windows"`; routes stdout/stderr into the log with `SetStdHandle` (std looks the handle up on every write).
+- `src/main.rs`: the `peripheral-lite` CLI (argument parsing and output).
+- `src/bin/bg.rs`: `peripheral-lite-bg`, the windowless watcher. Built with `windows_subsystem = "windows"`; routes stdout/stderr into the log with `SetStdHandle` (std looks the handle up on every write).
 - `src/autostart.rs`: HKCU `Run` value, plus starting (`CreateProcessW`) and stopping (Toolhelp + `TerminateProcess`) the watcher. `std::process::Command` was avoided: it added ~74 KB.
 - `src/hid.rs`: SetupDi enumeration, HidP caps, CreateFileW (shared R/W, overlapped).
   - One persistent overlapped read per collection, cancelled and drained on drop.
@@ -55,22 +55,23 @@ A Cargo workspace: the core package (one library plus two thin binaries; no trai
   - `Notifier` wraps `CM_Register_Notification` for HID interface arrival/removal.
 - `src/hidpp.rs`: framing, swid, reply matching, error decoding, retries, queue of unsolicited reports, Root/ping, feature names.
 - `src/device.rs`: interface grouping, receiver slots, identity, battery, DPI, report rate, onboard mode, event decoding.
-- `src/watch.rs`: `Monitor` (open, sync, `next` → `Vec<Update>`, `exec(sel, Cmd)` → `Snapshot`) shared by the CLI's `watch` (prints each `Update` via `Display`, lines unchanged and tested) and the GUI. Applies presets on every attach unless switched off (the GUI switches it off while `lghub-lite-bg` runs).
-- `gui/src/main.rs`: `lghub-lite-gui`.
+- `src/watch.rs`: `Monitor` (open, sync, `next` → `Vec<Update>`, `exec(sel, Cmd)` → `Snapshot`) shared by the CLI's `watch` (prints each `Update` via `Display`, lines unchanged and tested) and the GUI. Applies presets on every attach unless switched off (the GUI switches it off while `peripheral-lite-bg` runs).
+- `gui/src/main.rs`: `peripheral-lite-gui`.
   - eframe 0.37 (glow renderer) + tray-icon 0.26.
   - **Two threads:** the UI thread, and one worker that owns the `Monitor` and does all HID I/O, because requests can block for seconds while a wireless device wakes. Commands go over an `mpsc` channel plus `hid::Waker`; updates come back over a channel plus `request_repaint`.
   - **Tray:** eframe's `App::logic` also runs while the window is hidden whenever a repaint is requested, so tray clicks restore the window without Win32 workarounds.
-  - **Single instance:** mutex `Local\lghub-lite-gui`. A second launch shows the first window via `FindWindowW` + `ShowWindow` and exits.
+  - **Single instance:** mutex `Local\peripheral-lite-gui`. A second launch shows the first window via `FindWindowW` + `ShowWindow` and exits.
   - **Headset without a curve file:** the device view shows the voltage, explains why there is no percentage, and offers **Import from G HUB** (`audio::find_ghub_curve` searches `C:\ProgramData\LGHUB\depots` at most three folders deep for a `*battery*.xml` whose `pid` matches the model; only on that click) and **Open folder**. `Monitor::snapshot` re-checks for a curve, so an import takes effect without a restart. [HW: the found path was `…\162476\pro_headset\pro_x_wireless_headset_battery.xml`]
-  - **Autostart:** writes the same HKCU `Run` value as the CLI (`"…\lghub-lite-gui.exe" --tray`), so only one of the two watchers starts at login.
-  - **Updates** (`gui/src/update.rs`): only on a click. `GET api.github.com/repos/…/releases` via System32 `curl.exe` (no TLS crate), highest `vX.Y.Z` `tag_name` wins (every release is a pre-release, so `/releases/latest` would return nothing). Install (Windows): download `lghub-lite-<tag>-windows-x64.zip` + `.sha256`, verify (own SHA-256), extract with System32 `tar.exe`, rename each running exe to `*.old` and copy the new one in, undoing on failure; then start `lghub-lite-gui.exe --updated` (waits up to 10 s for the instance lock) and the bg watcher if it ran, and exit. `*.old` are removed at the next start. [Tested: the live v0.4.2 zip installs into a temp folder, `cargo test -- --ignored`]
+  - **Rename (lghub-lite → peripheral-lite, after v0.4.3):** `src/migrate.rs`, run first by the CLI, `peripheral-lite-bg` and the app (not in `--demo`). When something is left under the old name it takes the `migrate` lock, then: stops an old `lghub-lite-bg` (and, in the app, an old `lghub-lite-gui`) found through their old mutexes / lock files (`Local\lghub-lite-*`, `lghub-lite-*.lock`); moves each entry of the old settings folder into the new one if that is missing or holds only lock files (rename, else copy and leave the original); rewrites the old login entry (Run value `lghub-lite`, `~/.config/autostart/lghub-lite.desktop`, LaunchAgent `io.github.lghub-lite`) to the same program under the new name found next to the running exe (macOS: also in/around `peripheral-lite.app`), with an old-folder `--config` path renamed, and removes the old entry; restarts the watcher as `peripheral-lite-bg` if an old one was running. Each step is a no-op once done. **v0.4.3's updater cannot reach a peripheral-lite release** (it looks for `lghub-lite-<tag>-windows-x64.zip` and the old exe names), so users update by hand once; no bridge release.
+  - **Autostart:** writes the same HKCU `Run` value as the CLI (`"…\peripheral-lite-gui.exe" --tray`), so only one of the two watchers starts at login.
+  - **Updates** (`gui/src/update.rs`): only on a click. `GET api.github.com/repos/…/releases` via System32 `curl.exe` (no TLS crate), highest `vX.Y.Z` `tag_name` wins (every release is a pre-release, so `/releases/latest` would return nothing). Install (Windows): download `peripheral-lite-<tag>-windows-x64.zip` + `.sha256`, verify (own SHA-256), extract with System32 `tar.exe`, rename each running exe to `*.old` and copy the new one in, undoing on failure; then start `peripheral-lite-gui.exe --updated` (waits up to 10 s for the instance lock) and the bg watcher if it ran, and exit. `*.old` are removed at the next start. [Tested: the live v0.4.2 zip installs into a temp folder, `cargo test -- --ignored`]
 - `src/device.rs` verified writes: `set_dpi_verified`, `set_rate_verified`, `set_mode_verified`, `explain_refusal`, shared by the CLI and GUI.
 - `src/config.rs`: preset file parse/format, apply, and `write_atomic` (write `<file>.tmp`, then rename), shared by presets and dumps.
 - `src/profiles.rs`: onboard memory read path (0x8100 f0/f4/f5/f10), CRC-CCITT, directory parsing, dump format.
 - `src/audio.rs`: headset features 0x1F20 (battery voltage) and 0x8310 (EQ read).
 - `src/battery.rs`: voltage-to-percent curves (measured / G HUB file / built-in / generic estimate), the voltage recording and the curve builder, all in fixed-point integers.
-- `gui/`: the desktop app, a separate Cargo project (own `Cargo.lock`, `target/`, `[workspace]`) that uses the root as a library. The root has no workspace, so deleting `gui/` leaves a working CLI-only tree (checked by building a copy without it, 2026-10-16). README screenshots come from `lghub-lite-gui.exe --demo` (`docs/screenshots/`).
-- `dev/` (not part of the app): `agent.ps1` (GET-only G HUB agent client) and `calibrate.ps1` (logs lghub-lite vs G HUB battery readings to `%APPDATA%\lghub-lite\battery-calibration.csv`).
+- `gui/`: the desktop app, a separate Cargo project (own `Cargo.lock`, `target/`, `[workspace]`) that uses the root as a library. The root has no workspace, so deleting `gui/` leaves a working CLI-only tree (checked by building a copy without it, 2026-10-16). README screenshots come from `peripheral-lite-gui.exe --demo` (`docs/screenshots/`).
+- `dev/` (not part of the app): `agent.ps1` (GET-only G HUB agent client) and `calibrate.ps1` (logs peripheral-lite vs G HUB battery readings to `%APPDATA%\peripheral-lite\battery-calibration.csv`).
 
 **Threads.** Our code runs on one thread. Windows runs the `CM_Register_Notification` callback on a thread-pool thread. The callback only calls `SetEvent`, and the main thread waits on that event; no window or message loop is needed. While idle the process has 1 thread [HW, see §8].
 
@@ -228,16 +229,16 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
 - **Waiting:** `poll(2)` on the hidraw fds plus an eventfd (`Waker`) and a `NETLINK_KOBJECT_UEVENT` socket (`Notifier`). `Signal::consume` gives auto-reset semantics.
   - Writes are synchronous in the kernel, so the write timeout only applies while a node is not writable.
 - **Coexistence:** the kernel's `hid-logitech-hidpp` driver also talks HID++. Our software IDs differ (CLI 0x03, watchers 0x04), and replies are matched on the ID.
-- **Access:** `/dev/hidraw*` is root-only by default. `packaging/linux/70-lghub-lite.rules` adds `TAG+="uaccess"` for vendor 046d.
-- **Paths:** `$XDG_CONFIG_HOME/lghub-lite` (or `~/.config/lghub-lite`). Instance locks are flock files in `$XDG_RUNTIME_DIR`. Autostart uses `~/.config/autostart/lghub-lite.desktop`.
-- **App:** eframe x11 + wayland. The tray is ksni (StatusNotifierItem over D-Bus, async-io runtime, no GTK); without an SNI host the app runs without a tray. A second launch sends "show" over a Unix socket. Skin file dialogs use zenity or kdialog if installed. App id `lghub-lite` matches the desktop entry.
+- **Access:** `/dev/hidraw*` is root-only by default. `packaging/linux/70-peripheral-lite.rules` adds `TAG+="uaccess"` for vendor 046d.
+- **Paths:** `$XDG_CONFIG_HOME/peripheral-lite` (or `~/.config/peripheral-lite`). Instance locks are flock files in `$XDG_RUNTIME_DIR`. Autostart uses `~/.config/autostart/peripheral-lite.desktop`.
+- **App:** eframe x11 + wayland. The tray is ksni (StatusNotifierItem over D-Bus, async-io runtime, no GTK); without an SNI host the app runs without a tray. A second launch sends "show" over a Unix socket. Skin file dialogs use zenity or kdialog if installed. App id `peripheral-lite` matches the desktop entry.
 
 ### Centurion headsets (PRO X 2 LIGHTSPEED, 0af7), 2026-10-16
 - **[HW user report]** The PRO X 2 LIGHTSPEED headset's dongle (046d:0af7, "PRO X 2 LIGHTSPEED") exposes no HID++ collection. On interface 3 it has:
   - 000C/1 (2 B in), consumer keys;
   - FF13/1 (62/62 B);
   - FFA0/1 (64/64 B).
-  So lghub-lite listed nothing for it. The same report: PRO X SUPERLIGHT (wpid 4093) on receiver c547 works (HID++ 4.2; features 1004 v3, 2201 v2, 8060 v0, 8100), and its firmware names itself "PRO X Wireless".
+  So peripheral-lite listed nothing for it. The same report: PRO X SUPERLIGHT (wpid 4093) on receiver c547 works (HID++ 4.2; features 1004 v3, 2201 v2, 8060 v0, 8100), and its firmware names itself "PRO X Wireless".
 - **[PUB HeadsetControl, GPL-3.0; facts only, no code]** These headsets speak "Centurion" on FFA0/1. The implementation is `src/centurion.rs`:
   - **Frames:** 64-byte frames with report ID 0x51: `[0x51, len, flags, payload]`.
   - **Features:** HID++-style Root (index 0, GetFeature = function 0 with the feature ID) and FeatureSet. Software ID 1.
@@ -247,7 +248,7 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
   - **Other features named:** 0x0108 auto-sleep, 0x0604 sidetone, 0x0636 onboard EQ, 0x020D parametric EQ.
 - **Status:**
   - **[HW user report, v0.2.2, 15:40]** Confirmed: bridge index 3; headset features 0x0104 battery at index 4, 0x0108 auto-sleep 6, 0x0604 sidetone 7, 0x0636 onboard EQ 9.
-  - Absent features (0x0601, 0x060B, 0x020D) are not answered with index 0. The headset rejects them: `51 0A 00 03 10 00 05 00 FF 00 01 05` (sub index 0xFF, then index, function, code 0x05). lghub-lite reports these as "not present".
+  - Absent features (0x0601, 0x060B, 0x020D) are not answered with index 0. The headset rejects them: `51 0A 00 03 10 00 05 00 FF 00 01 05` (sub index 0xFF, then index, function, code 0x05). peripheral-lite reports these as "not present".
   - The battery read gave `93% discharging`.
   - Since v0.2.3 the watcher and the app read it on the 5-minute poll. A failed read reports the headset offline until it answers again. Commands other than Refresh answer "battery only".
   - Still read-only.
@@ -320,11 +321,11 @@ All [INF]: written without Linux hardware. It compiles and passes clippy for
     - The choice is kept in `corsair.txt` (`0a73 lights=off`). The watcher and the app apply it again when the headset comes back (switched on, dongle plugged in), because software mode probably does not survive a power cycle [INF; to check].
   - **[HW owner report 2026-10-17] No headset sounds in software mode:** with the lights off, the mute/unmute, low-battery, very-low-battery and power tones stop; they come back with "on" (hardware mode).
     - [PUB] The prompts are recordings the firmware plays itself, and only in hardware mode; in software mode a mute change is only sent as the A6 event (ToastKiste21/corsair-hs80-max-re, README "Mic Mute Notifications"; HS80 MAX firmware, same protocol). No property turns them back on. arthurrmp/hs80-macos-menu-bar (HS80 RGB Wireless) plays its own mute tones on the host outside hardware mode.
-    - So lghub-lite plays its own tones (`sound.rs`, generated sine chimes, no files) while the lights are off: mute/unmute on the A6 event, low battery at 15 % and very low at 5 % (once each on the way down, played again only after charging 3 points above the line, so a wobbling reading warns once; the HS80's own thresholds are unknown).
+    - So peripheral-lite plays its own tones (`sound.rs`, generated sine chimes, no files) while the lights are off: mute/unmute on the A6 event, low battery at 15 % and very low at 5 % (once each on the way down, played again only after charging 3 points above the line, so a wobbling reading warns once; the HS80's own thresholds are unknown).
     - They play on the headset's own output, found by name: waveOut lists it as `Headset Earphone (CORSAIR HS80 ` [HW Windows 11], cut to 31 characters, so the part in brackets must begin the HID product name. Windows only so far.
     - The app and the watcher both see every event, so only the process holding the `sounds-<pid>` instance lock plays them.
     - The power tones are not replaced: at power-off the headset is already gone.
-  - **[HW 2026-10-17] Two processes, one dongle:** while the app (downloaded CI build) was polling, another process's reads received the app's replies; every open handle gets every reply, and replies carry no property. Since v0.4.0 each request holds a shared lock ("corsair-PID": named mutex / flock), so lghub-lite processes take turns. iCUE does not take it, so keep iCUE closed.
+  - **[HW 2026-10-17] Two processes, one dongle:** while the app (downloaded CI build) was polling, another process's reads received the app's replies; every open handle gets every reply, and replies carry no property. Since v0.4.0 each request holds a shared lock ("corsair-PID": named mutex / flock), so peripheral-lite processes take turns. iCUE does not take it, so keep iCUE closed.
   - **[HW 2026-10-17, owner-confirmed]** `watch` printed mic mute/unmute and charger in/out at once, "headset off" within the 30 s quick poll, and the battery again after switching on. A first run showed no events at all: Windows refuses write access to the input-only FF42/2 collection, so `hid::Handle::open` now falls back to read-only for collections without output reports.
 
 ### Headset (PRO X Wireless, 0aba, HID++ 4.2 on FF43/0202)
@@ -338,9 +339,9 @@ The function layouts were read from G HUB's request code with Rizin, against the
   - f1 → one byte; [HW] `1E` (30), meaning [UNK].
   - f2 sets one byte, f3 returns 2 bytes, f4 writes `[01, x]`: notification/config [INF]. These are not used.
 - **Battery percentage: user-supplied curve** (human decision, 2026-10-15).
-  - **How it works.** lghub-lite looks in the preset folder (`%APPDATA%\lghub-lite\`, or the folder of `--config`) for a `*.xml` power model whose `<powermodel pid=…>` equals the device's model ID.
+  - **How it works.** peripheral-lite looks in the preset folder (`%APPDATA%\peripheral-lite\`, or the folder of `--config`) for a `*.xml` power model whose `<powermodel pid=…>` equals the device's model ID.
     - The user copies that file from their **own** G HUB install, e.g. `C:\ProgramData\LGHUB\depotsr476\pro_headset\pro_x_wireless_headset_battery.xml`.
-    - It is **never bundled or committed** (`*.xml` is in `.gitignore`), and lghub-lite never reads G HUB's install folder. Without the file, only the voltage is shown, with a hint.
+    - It is **never bundled or committed** (`*.xml` is in `.gitignore`), and peripheral-lite never reads G HUB's install folder. Without the file, only the voltage is shown, with a hint.
   - **Format used** [OBS file + protocol.md §10.6]: the `<discharge>` rows `minutes, volts, mAh used` (inside CDATA), and `<blocks default_unit="milliamps">` `power="N"` currents.
   - **Percent** = remaining share of the final mAh, taking the first row (in time order) at or below the measured voltage, floored.
     - [HW + file] 3919 mV → 80.5 % (G HUB showed 80); 3903 mV → **78 % (G HUB 78)**.
@@ -355,7 +356,7 @@ The function layouts were read from G HUB's request code with Rizin, against the
   - **Refinement:** a newer discharge is averaged with the saved curve (per voltage step and runtime), so ageing is followed gradually. Triggered automatically on the charging rise, on attach after recording the first reading (the headset may have been charged while nothing ran), or by the GUI button / `curve <dev> build`.
   - [HW 2026-10-16] At 3850 mV: G HUB file 71 %, ~17.1 h; generic estimate ≈50 %. The generic table is resting-voltage data and the headset reads lower under load, so it under-reports by ~20 points mid-range. Not tuned against Logitech's numbers on purpose (that would be copying their curve); the measured curve is the fix.
   - The G HUB file shows this headset running down to 3.29 V before it stops (1312 min), so the 3550 mV "empty" threshold is reached in normal use.
-- **0x1F20 f0 can answer NotAllowed (0x05)** [HW 2026-10-16 14:39]: `-> 11 FF 06 03 00`, `<- 11 FF FF 06 03 05`, seen once by `lghub-lite report`. Battery reads at 12:23 and at 14:39 (a later run) worked. Cause [UNK]; one candidate is the headset charging. Together with the 0 mV / flags 0x00 answers seen while it reconnects, it suggests the ADC is not always available. The app shows such a read as "unreadable" and keeps its last value.
+- **0x1F20 f0 can answer NotAllowed (0x05)** [HW 2026-10-16 14:39]: `-> 11 FF 06 03 00`, `<- 11 FF FF 06 03 05`, seen once by `peripheral-lite report`. Battery reads at 12:23 and at 14:39 (a later run) worked. Cause [UNK]; one candidate is the headset charging. Together with the 0 mV / flags 0x00 answers seen while it reconnects, it suggests the ADC is not always available. The app shows such a read as "unreadable" and keeps its last value.
 - **No unsolicited 0x1F20 events** in ~3.5 min of capture with G HUB running. Only G HUB's own reads (`11 FF 06 0D …`, swid 0x0D, about once a minute) were seen.
   - 0x1F20 f3 config read returns `01 01` [HW]. Its meaning is [INF]: possibly "reporting enabled", but no event arrived.
   - So `watch` reads the voltage itself every **5 minutes**. This is the only timer in the program, justified because battery changes over hours and G HUB itself polls every ~60 s. It prints only when the percentage (or, without a curve, the 10 mV step) changes.
@@ -416,7 +417,7 @@ No `clap`, `serde`, logging crates or async runtime. Dev-only research tool: `de
 | 2026-10-15 | SL2 | LIGHTSPEED | presets: save 1200/500 (scratch file), reject dpi=50, `apply` twice, then onboard mode and `watch` start-up | ✅ apply: "host mode, dpi 1200, rate 500", then "(already)" on the second run; `watch` applied the same at start-up and printed the device's DPI/rate events; restored onboard, 800, 1000 Hz |
 | 2026-10-15 | SL2 | LIGHTSPEED | onboard memory: `profiles`, two `dump`s, backup to %APPDATA% | ✅ 16 user sectors erased; factory directory 0x0100 → profile 0x0101 (active); device GetCRC = our CRC for erased sectors; dumps byte-identical; read-only throughout |
 | 2026-10-15 | headset 0aba | USB (own dongle) | ping, name, type, firmware, features | ✅ firmware matches agent |
-| 2026-10-15 | headset 0aba | USB (own dongle) | human copied the power-model XML into %APPDATA%\lghub-lite; `battery 0aba` | ✅ percentage shown (human-confirmed); our test copy: 78 % / 18.8 h vs G HUB 78 % / 18.7 h; watch printed the 78 → 77 % drop from its 5-min read |
+| 2026-10-15 | headset 0aba | USB (own dongle) | human copied the power-model XML into %APPDATA%\peripheral-lite; `battery 0aba` | ✅ percentage shown (human-confirmed); our test copy: 78 % / 18.8 h vs G HUB 78 % / 18.7 h; watch printed the 78 → 77 % drop from its 5-min read |
 | 2026-10-15 | headset 0aba | USB (own dongle) | 0x1F20 battery, 0x8300 sidetone read + write 30 → read-back → 0, 0x8310 EQ read + write attempt | ✅ 3919 mV vs G HUB 80 %; sidetone write/read-back ok; EQ read ok; EQ write refused (InvalidArgument, unchanged) → write removed |
 | 2026-10-17 | Corsair HS80 RGB Wireless (1b1c:0a73) | USB (own dongle) | read-only get sweep 01–FF on dongle and headset; `devices`, `info`, `battery`; `watch` with mic mute/unmute, charger in/out, headset off/on (human run, iCUE closed) | ✅ 31 % / 3657 mV discharging, state 1 on the charger; events for mic and charger shown at once; off/on noticed within 30 s |
 | — | — | — | `cargo test --workspace`: 38 offline byte-exact tests (fixtures from §9 and the [HW] traces above) | ✅ |
@@ -439,49 +440,49 @@ All tests ran with G HUB running. G HUB does not manage the SL2.
 TEST REQUEST 5 (hot-plug and wireless connect/disconnect with `watch`) passed on 2026-10-15; see §5.
 
 **TEST REQUEST 10: the app** (redesigned 2026-10-16 as the "Battery Tracker v3" widget).
-- Run `lghub-lite-gui.exe`. ◀ ▶ and the Devices list switch between **PRO X 2** and the headset; the display, gauge and history follow.
+- Run `peripheral-lite-gui.exe`. ◀ ▶ and the Devices list switch between **PRO X 2** and the headset; the display, gauge and history follow.
 - PRO X 2, **Settings**: the drawer opens. **Use host**: mode becomes "Host — settings from this PC".
-- DPI 1600, **Apply**: "now 1600", the cursor is faster. Pick another rate chip. `lghub-lite presets` now shows that DPI and rate (saved automatically). Switch the mouse off and on: they come back.
-- Restore: DPI 800 and your usual rate, then **Use onboard**: mode is "Onboard profile" and `lghub-lite presets` no longer lists the mouse.
+- DPI 1600, **Apply**: "now 1600", the cursor is faster. Pick another rate chip. `peripheral-lite presets` now shows that DPI and rate (saved automatically). Switch the mouse off and on: they come back.
+- Restore: DPI 800 and your usual rate, then **Use onboard**: mode is "Onboard profile" and `peripheral-lite presets` no longer lists the mouse.
 - Headset, **Settings**: the battery curve line, the recording tooltip on **Build from recording**, and **Open folder** work.
 - **Alert at** + / −: the red line moves on the gauge and the history; the value is kept after a restart.
-- **Skins** (click the lghub-lite title, or tray menu **Skins…**): pick each built-in (Amber shows pixel digits); change a colour on a built-in: a "(mine)" skin appears and is selected; **Export current** saves a `.json`; **Load skin file…** that file back; restart: the chosen skin is kept.
+- **Skins** (click the peripheral-lite title, or tray menu **Skins…**): pick each built-in (Amber shows pixel digits); change a colour on a built-in: a "(mine)" skin appears and is selected; **Export current** saves a `.json`; **Load skin file…** that file back; restart: the chosen skin is kept.
 - Title bar: drag moves the widget; the left round button minimises; the right one hides it to the tray. Left-click the tray icon: the widget returns. Tray menu **Quit**: the app exits.
-- **Tray** button: `lghub-lite autostart` shows the GUI entry; click again to remove it.
-- Icons: the taskbar battery lights one cell per started 25 % of the lowest device (red at its alert level); the tray shows two bars (first two devices), checkerboard when one is off. Switch the headset off: its tray bar turns to the checkerboard. (Generated icons are byte-identical to the design's PNGs for 75 %, 50/64 %, 14 % low and offline; checked with `LGHUB_LITE_ICON_DUMP=<dir> cargo test -p lghub-lite-gui icons` and a Python compare.)
+- **Tray** button: `peripheral-lite autostart` shows the GUI entry; click again to remove it.
+- Icons: the taskbar battery lights one cell per started 25 % of the lowest device (red at its alert level); the tray shows two bars (first two devices), checkerboard when one is off. Switch the headset off: its tray bar turns to the checkerboard. (Generated icons are byte-identical to the design's PNGs for 75 %, 50/64 %, 14 % low and offline; checked with `PERIPHERAL_LITE_ICON_DUMP=<dir> cargo test -p peripheral-lite-gui icons` and a Python compare.)
 
 **TEST REQUEST 12: Linux.** Needs a Linux machine (a live USB stick is enough) and the receiver or headset.
-- Install the udev rule (packaging/linux/INSTALL-linux.md), replug, then run `./lghub-lite collections`. Expected: the receiver's FF00/1 (7/7) and FF00/2 (20/20) collections on one `/dev/hidrawN`, and the headset's FF43 collection. No separate node for the paired mouse.
-- Run `./lghub-lite devices`, `battery c54d:1`, `dpi c54d:1`, and `watch` with an unplug and replug. All should match Windows.
-- Run `./lghub-lite-gui`: both devices listed, a tray icon on KDE/XFCE (on GNOME with the AppIndicator extension), and Tray adds `~/.config/autostart/lghub-lite.desktop`.
+- Install the udev rule (packaging/linux/INSTALL-linux.md), replug, then run `./peripheral-lite collections`. Expected: the receiver's FF00/1 (7/7) and FF00/2 (20/20) collections on one `/dev/hidrawN`, and the headset's FF43 collection. No separate node for the paired mouse.
+- Run `./peripheral-lite devices`, `battery c54d:1`, `dpi c54d:1`, and `watch` with an unplug and replug. All should match Windows.
+- Run `./peripheral-lite-gui`: both devices listed, a tray icon on KDE/XFCE (on GNOME with the AppIndicator extension), and Tray adds `~/.config/autostart/peripheral-lite.desktop`.
 
 **TEST REQUEST 11: measured headset curve.** Needs one full discharge, no G HUB.
-- Charge the headset fully, then use it with the app (or `lghub-lite-bg`) running until it is nearly empty or switches off, then plug it in to charge with the app still running.
-- Expected: the event log shows "battery curve updated from the recorded discharge"; `lghub-lite curve 0aba` shows "your measured curve" and a full runtime (G HUB's file says ~24 h at its assumed draw).
-- To compare: move the G HUB XML out of `%APPDATA%\lghub-lite\` first, otherwise the measured curve still wins, and compare `battery 0aba` with and without it at a few charge levels.
+- Charge the headset fully, then use it with the app (or `peripheral-lite-bg`) running until it is nearly empty or switches off, then plug it in to charge with the app still running.
+- Expected: the event log shows "battery curve updated from the recorded discharge"; `peripheral-lite curve 0aba` shows "your measured curve" and a full runtime (G HUB's file says ~24 h at its assumed draw).
+- To compare: move the G HUB XML out of `%APPDATA%\peripheral-lite\` first, otherwise the measured curve still wins, and compare `battery 0aba` with and without it at a few charge levels.
 - Please keep `curve-0aba.txt`: it can become the built-in curve for this headset.
 
 **TEST REQUEST 7: headset sidetone is audible.** (Command removed.) ❌ Failed on 2026-10-15: set 50 (read-back 50), human heard nothing; restored 0. Possible causes [INF]: a different value scale; or the effective sidetone being the USB-audio mixer control that G HUB's audio side uses rather than HID++ 0x8300. Open. G HUB can stay open.
-- Commands: put the headset on, then `lghub-lite sidetone 0aba 50`, speak, then `lghub-lite sidetone 0aba 0`.
+- Commands: put the headset on, then `peripheral-lite sidetone 0aba 50`, speak, then `peripheral-lite sidetone 0aba 0`.
 - What to observe: at 50 you hear your own voice in the headset; at 0 you don't.
 - Also report whether G HUB later puts it back to 0 by itself.
 
-**TEST REQUEST 9: headset battery while charging.** Plug the headset in to charge, then run `lghub-lite --verbose battery 0aba` and `powershell -File dev\calibrate.ps1` (G HUB running). Expected: report the flags value. If it differs from 0x01, that bit means charging, and charging-curve support can be added.
+**TEST REQUEST 9: headset battery while charging.** Plug the headset in to charge, then run `peripheral-lite --verbose battery 0aba` and `powershell -File dev\calibrate.ps1` (G HUB running). Expected: report the flags value. If it differs from 0x01, that bit means charging, and charging-curve support can be added.
 
 **TEST REQUEST 8: battery calibration** (now only a cross-check of the curve against G HUB; optional).
 - Command: `powershell -File dev\calibrate.ps1` from the repo folder, with the headset **not charging**.
 - When: run it at several charge levels, for example full, ~60 %, ~30 % and ~10 %.
-- Each run appends one lghub-lite vs G HUB comparison point.
+- Each run appends one peripheral-lite vs G HUB comparison point.
 
 **TEST REQUEST 6: presets applied on reconnect.** G HUB can stay open.
 - Commands:
-  1. `lghub-lite preset c54d:1 dpi=1600 rate=1000` (or any values you like).
-  2. Start `lghub-lite watch` and leave it running.
+  1. `peripheral-lite preset c54d:1 dpi=1600 rate=1000` (or any values you like).
+  2. Start `peripheral-lite watch` and leave it running.
   3. Switch the mouse off and on; separately, let it sleep and then move it.
 - Expected: after each `slot 1: connected`, a line `preset applied: …`.
   - If `host mode` appears in that list after a power cycle, host mode does **not** survive a power cycle; that answers the open question in §7.
 - Over the cable, use `c09b` once to confirm the same preset (model 40a9) is found there.
-- Restore: `lghub-lite preset c54d:1 clear`, then `lghub-lite mode c54d:1 onboard`.
+- Restore: `peripheral-lite preset c54d:1 clear`, then `peripheral-lite mode c54d:1 onboard`.
 
 ## 7. Open questions
 - Does host mode (0x8100 = 2) persist across a power cycle or a cable unplug? [UNK]
@@ -499,7 +500,7 @@ TEST REQUEST 5 (hot-plug and wireless connect/disconnect with `watch`) passed on
   - check what f10's repeated bytes mean;
   - find the write sequence (f6 begin, f7 16-byte write with BE16 result, f8 end; §9.9);
   - **get explicit human approval.**
-  - The backup `%APPDATA%\lghub-lite\onboard-backup-40a9-2026-10-15.txt` exists. Restoring from it is not implemented.
+  - The backup `%APPDATA%\peripheral-lite\onboard-backup-40a9-2026-10-15.txt` exists. Restoring from it is not implemented.
 - **Factory directory sector 0x0100** contains more than the directory after the `FFFF` end marker (bytes such as `03 04 05 06 00 01 02 …`, `D0 07`, …). Their meaning is [UNK].
 - **Unknown SL2 feature IDs:** 0x2251, 0x80E0, 0x1602, plus the engineering IDs 0x1803/0x1817/0x1830/0x1875/0x1861/0x1E02/0x1E22/0x1EB0/0x18B1.
 - **`watch` limit:** it waits on at most 63 collections (the `WaitForMultipleObjects` limit). That is far beyond any realistic setup.
@@ -509,13 +510,13 @@ TEST REQUEST 5 (hot-plug and wireless connect/disconnect with `watch`) passed on
 ## 8. Metrics (2026-10-15, release: opt-level "s", LTO, codegen-units 1, panic=abort, strip)
 | Metric | Value |
 |---|---|
-| `lghub-lite.exe` | **311,296 B** (measured battery curves, recording, `curve` command: +22.5 KB) |
-| `lghub-lite-bg.exe` | **249,856 B** (+20.5 KB, same cause) |
-| `lghub-lite-gui.exe` | **4,889,088 B** (eframe/glow + tray-icon; Battery Tracker v3 widget, skins and history: +167 KB; the design's fonts, trimmed: +325 KB) |
-| Crates | core: 3 (`lghub-lite`, `windows-sys`, `windows-link`), unchanged; GUI package: 122 |
+| `peripheral-lite.exe` | **311,296 B** (measured battery curves, recording, `curve` command: +22.5 KB) |
+| `peripheral-lite-bg.exe` | **249,856 B** (+20.5 KB, same cause) |
+| `peripheral-lite-gui.exe` | **4,889,088 B** (eframe/glow + tray-icon; Battery Tracker v3 widget, skins and history: +167 KB; the design's fonts, trimmed: +325 KB) |
+| Crates | core: 3 (`peripheral-lite`, `windows-sys`, `windows-link`), unchanged; GUI package: 122 |
 | `devices` wall time | median 115 ms (10 runs; headset + receiver, includes HID++ round trips) |
-| `watch` / `lghub-lite-bg` idle | **0 ms CPU** over 30 s, 1 thread between events, ~5.6 MB working set; one 0x1F20 read per 5 min when a voltage-only headset is present |
-| GUI idle | **0 ms CPU** over 20 s, both shown and hidden; 7 threads; ~181 MB working set / 211 MB private. Most of that is the OpenGL driver context, not our code; the README points users who want a minimal footprint to `lghub-lite-bg` |
+| `watch` / `peripheral-lite-bg` idle | **0 ms CPU** over 30 s, 1 thread between events, ~5.6 MB working set; one 0x1F20 read per 5 min when a voltage-only headset is present |
+| GUI idle | **0 ms CPU** over 20 s, both shown and hidden; 7 threads; ~181 MB working set / 211 MB private. Most of that is the OpenGL driver context, not our code; the README points users who want a minimal footprint to `peripheral-lite-bg` |
 
 **Size history**, with the cause of each step:
 - 184,832 B at the MVP (opt-level 3 was 201,728 B, so we keep "s");

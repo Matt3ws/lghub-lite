@@ -1,6 +1,6 @@
 //! Login autostart via a per-user LaunchAgent,
-//! `~/Library/LaunchAgents/io.github.lghub-lite.plist`, which launchd starts at the next
-//! login (RunAtLoad). Only touched when the user runs `lghub-lite autostart on|off` or ticks
+//! `~/Library/LaunchAgents/io.github.peripheral-lite.plist`, which launchd starts at the next
+//! login (RunAtLoad). Only touched when the user runs `peripheral-lite autostart on|off` or ticks
 //! Tray in the app.
 
 use std::io;
@@ -10,13 +10,19 @@ use super::unix::split;
 
 pub use super::unix::start;
 
-const LABEL: &str = "io.github.lghub-lite";
+const LABEL: &str = "io.github.peripheral-lite";
+/// The LaunchAgent label up to v0.4.3.
+pub const OLD_ID: &str = "io.github.lghub-lite";
 
 fn agent_path() -> io::Result<PathBuf> {
+    agent_path_of(LABEL)
+}
+
+fn agent_path_of(label: &str) -> io::Result<PathBuf> {
     let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?;
     Ok(PathBuf::from(home)
         .join("Library/LaunchAgents")
-        .join(format!("{LABEL}.plist")))
+        .join(format!("{label}.plist")))
 }
 
 fn xml_escape(s: &str) -> String {
@@ -79,7 +85,12 @@ pub fn enable(command: &str) -> io::Result<()> {
 }
 
 pub fn disable() -> io::Result<()> {
-    match std::fs::remove_file(agent_path()?) {
+    disable_of(LABEL)
+}
+
+/// Remove the LaunchAgent `label`; succeeds if it was not there.
+pub fn disable_of(label: &str) -> io::Result<()> {
+    match std::fs::remove_file(agent_path_of(label)?) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
     }
@@ -87,7 +98,12 @@ pub fn disable() -> io::Result<()> {
 
 /// The registered command line, if any.
 pub fn status() -> io::Result<Option<String>> {
-    match std::fs::read_to_string(agent_path()?) {
+    status_of(LABEL)
+}
+
+/// The command line in LaunchAgent `label`, if any.
+pub fn status_of(label: &str) -> io::Result<Option<String>> {
+    match std::fs::read_to_string(agent_path_of(label)?) {
         Ok(text) => Ok(command_of(&text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
@@ -138,12 +154,12 @@ mod tests {
 
     #[test]
     fn agent_round_trips_the_command() {
-        let cmd = r#""/Applications/lghub lite/lghub-lite-gui" --tray"#;
+        let cmd = r#""/Applications/peripheral lite/peripheral-lite-gui" --tray"#;
         let a = agent(cmd);
-        assert!(a.contains("<string>/Applications/lghub lite/lghub-lite-gui</string>"));
+        assert!(a.contains("<string>/Applications/peripheral lite/peripheral-lite-gui</string>"));
         assert!(a.contains("<key>RunAtLoad</key>\n\t<true/>"));
         assert_eq!(command_of(&a).as_deref(), Some(cmd));
-        let cmd = r#""/x/lghub-lite-bg" --config "/a & b/p.txt""#;
+        let cmd = r#""/x/peripheral-lite-bg" --config "/a & b/p.txt""#;
         assert_eq!(command_of(&agent(cmd)).as_deref(), Some(cmd));
     }
 }
