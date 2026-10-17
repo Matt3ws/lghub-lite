@@ -43,6 +43,9 @@ Corsair headsets (experimental) are 1b1c:PID, e.g. 1b1c:0a73. For them also:
   lights <dev> [on|off]     headset LEDs on or off
   autooff <dev> [MIN|off]   switch off after MIN idle minutes
   mic <dev>                 mic muted or on (read-only: the headset decides)
+  sound <dev> <mute|unmute|low|verylow>
+                            play lghub-lite's own tone on the headset (Windows); with the
+                            lights off the headset is silent, so the watcher plays these
 Presets live in presets.txt in the settings folder (Windows: %APPDATA%\\lghub-lite,
 Linux: ~/.config/lghub-lite, macOS: ~/Library/Application Support/lghub-lite) unless
 --config is given.";
@@ -133,6 +136,7 @@ fn main() {
         ["lights", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::Lights, rest.first()),
         ["autooff", d, rest @ ..] if rest.len() <= 1 => corsair_setting(&opts, d, Setting::AutoOff, rest.first()),
         ["mic", d] => corsair_setting(&opts, d, Setting::Mic, None),
+        ["sound", d, t] => play_tone(d, t),
         ["info", d] => match centurion_for(d) {
             Some(c) => centurion_probe(&c, opts.trace, false),
             None => with_dev(&opts, d, info),
@@ -427,6 +431,26 @@ fn corsair_for(sel: &str) -> Result<hid::Info, Error> {
         .find(|c| c.0 == pid)
         .map(|c| c.2)
         .ok_or_else(|| Error::Other(format!("no Corsair headset {sel} (run `devices`)")))
+}
+
+/// `sound`: play one of the tones the watcher plays while the lights are off.
+fn play_tone(sel: &str, tone: &str) -> Result<(), Error> {
+    let t = lghub_lite::sound::Tone::parse(tone)
+        .ok_or_else(|| Error::Other("tone must be mute, unmute, low or verylow".into()))?;
+    let info = corsair_for(sel)?;
+    match lghub_lite::sound::play(t, &info.product) {
+        Ok(output) => {
+            println!("played on {output}");
+            Ok(())
+        }
+        Err(e) => {
+            let outputs = lghub_lite::platform::audio_outputs();
+            for (id, name) in &outputs {
+                eprintln!("  output {id}: {name}");
+            }
+            Err(Error::Other(e))
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
