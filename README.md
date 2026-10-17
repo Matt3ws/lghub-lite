@@ -121,8 +121,10 @@ Double-click **`peripheral-lite-gui.exe`**. It opens a small battery widget:
 
   <p align="center"><img src="docs/screenshots/skins.png" width="800" alt="The skin manager next to the widget"></p>
 
-The round buttons in the title bar minimise the widget or hide it to the **tray**; drag the
-title bar to move it. Use the tray menu's **Quit** to exit.
+The round buttons in the title bar minimise the widget and close it; drag the title bar to move
+it. With **Tray** on, closing hides the widget to the **tray** (on Linux under Wayland it is
+minimised instead, as Wayland cannot hide a window) and the tray menu's **Quit** exits; with
+**Tray** off, closing quits the app.
 
 **Check for updates** in the title bar asks GitHub for a newer release, only when you click it
 (the app never checks on its own). If there is one, the button becomes **Update to vX.Y.Z**; on

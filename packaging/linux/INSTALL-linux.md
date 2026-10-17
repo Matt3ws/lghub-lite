@@ -46,7 +46,9 @@ the "AppIndicator and KStatusNotifierItem Support" extension. Without a tray, cl
 window quits the app.
 
 **Tray** in the app, or `peripheral-lite autostart on`, starts it at login through
-`~/.config/autostart/peripheral-lite.desktop`. Settings, presets, skins and battery recordings
+`~/.config/autostart/peripheral-lite.desktop`. With **Tray** on, closing the window keeps the
+app running in the tray; under Wayland, which cannot hide a window, it is minimised instead
+(also when it starts at login). Settings, presets, skins and battery recordings
 live in `~/.config/peripheral-lite/`.
 
 ## Known gaps
