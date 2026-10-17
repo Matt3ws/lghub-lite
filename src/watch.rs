@@ -521,6 +521,9 @@ pub struct Monitor {
     /// Next QUICK_POLL of the headsets that need it (`Polled::quick`).
     next_quick: Instant,
     apply_presets: bool,
+    /// `Polled::battery_warned` by PID, kept while the headset's interface is gone: a dongle
+    /// that drops out and comes back (more likely on a low battery) must not warn again.
+    battery_warned: Vec<(u16, u8)>,
 }
 
 impl Monitor {
@@ -537,6 +540,7 @@ impl Monitor {
             next_poll: Instant::now() + BATTERY_POLL,
             next_quick: Instant::now() + QUICK_POLL,
             apply_presets: true,
+            battery_warned: Vec::new(),
         };
         let mut out = Vec::new();
         m.sync(&mut out)?;
@@ -636,6 +640,7 @@ impl Monitor {
             }
             Got::Gone(Owner::Polled(k), e) => {
                 let p = self.polled.remove(k);
+                self.keep_warned(&p);
                 out.push(Update::Removed {
                     pid: p.pid,
                     product: p.product.clone(),
@@ -669,6 +674,12 @@ impl Monitor {
             }
         }
         Ok(out)
+    }
+
+    /// Remember a removed headset's battery warning for when it comes back.
+    fn keep_warned(&mut self, p: &Polled) {
+        self.battery_warned.retain(|w| w.0 != p.pid);
+        self.battery_warned.push((p.pid, p.battery_warned));
     }
 
     /// Re-enumerate HID++ interfaces: drop the ones that disappeared, open and describe new ones.
@@ -721,6 +732,7 @@ impl Monitor {
             .partition(|c| found.iter().any(|f| f.2.iface == c.key));
         self.polled = keep;
         for c in gone {
+            self.keep_warned(&c);
             out.push(Update::Removed {
                 pid: c.pid,
                 product: c.product.clone(),
@@ -759,13 +771,14 @@ impl Monitor {
                         lights_off: protocol == Protocol::Corsair && corsair::lights_off_wanted(&dir, pid),
                         dir: dir.clone(),
                         sounds: None,
-                        battery_warned: 0,
+                        battery_warned: self.battery_warned.iter().find(|w| w.0 == pid).map_or(0, |w| w.1),
                     };
                     let (battery, battery_percent) = match c.read() {
                         Ok((t, p)) => {
                             c.last = t.clone();
                             c.percent = Some(p);
-                            // no warning for a battery already low when lghub-lite starts
+                            // no warning for a battery already low when it is found (lghub-lite
+                            // starting, the dongle plugged in)
                             sound::battery_warning(p, &mut c.battery_warned);
                             (Some(t), Some(p))
                         }
