@@ -114,6 +114,13 @@ Double-click **`lghub-lite-gui.exe`**. It opens a small battery widget:
 The round buttons in the title bar minimise the widget or hide it to the **tray**; drag the
 title bar to move it. Use the tray menu's **Quit** to exit.
 
+**Check for updates** in the title bar asks GitHub for a newer release, only when you click it
+(the app never checks on its own). If there is one, the button becomes **Update to vX.Y.Z**; on
+Windows that downloads the release zip, verifies its SHA-256, replaces `lghub-lite-gui.exe`,
+`lghub-lite.exe` and `lghub-lite-bg.exe` in the app's folder and restarts the app. On Linux and
+macOS it opens the release page instead. It uses the system's `curl` (built into Windows 10 and
+later).
+
 The icons are live too. The **taskbar** battery shows the device with the lowest charge: one
 lit cell per started 25 %, red at or under that device's alert level. The **tray** icon has one
 bar per device (the first two in the list), filled to its charge: green, red when low, and a
