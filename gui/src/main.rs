@@ -16,6 +16,7 @@ mod icons;
 mod os;
 mod skin;
 mod tray;
+mod update;
 mod view;
 
 use std::path::PathBuf;
@@ -46,6 +47,19 @@ enum FromWorker {
     // boxed: a Snapshot is several times larger than the other messages
     Snapshot(String, Result<Box<Snapshot>, String>),
     Fatal(String),
+}
+
+/// The update button: what it shows and does next.
+pub enum UpdateState {
+    Idle,
+    Checking,
+    Available(update::Release),
+    Installing(update::Release),
+}
+
+enum UpdateMsg {
+    Checked(Result<Option<update::Release>, String>),
+    Installed(update::Release, Result<(), String>),
 }
 
 type IconState = (Option<icons::Level>, Option<icons::Level>, Option<icons::Level>);
@@ -134,6 +148,8 @@ struct App {
     demo: Option<Vec<Snapshot>>,
     /// Height of the skin manager panel at the last frame.
     manager_h: f32,
+    update: UpdateState,
+    update_rx: Option<Receiver<UpdateMsg>>,
 }
 
 fn main() {
@@ -151,7 +167,7 @@ fn main() {
     // One app per session; the lock is held until the process exits.
     let _instance = match demo {
         Some(_) => None,
-        None => match platform::instance_lock("gui") {
+        None => match instance_lock(args.iter().any(|a| a == "--updated")) {
             Some(lock) => Some(lock),
             None => {
                 os::focus_existing(TITLE);
@@ -159,6 +175,9 @@ fn main() {
             }
         },
     };
+    if demo.is_none() {
+        update::clean_up();
+    }
     let bg_running = demo.is_none() && platform::instance_running("bg");
 
     let big = os::icon_sizes().1;
@@ -191,6 +210,20 @@ fn main() {
             Ok(Box::new(app))
         }),
     );
+}
+
+/// The single-instance lock. Right after an update the old copy is still exiting: wait for it.
+fn instance_lock(updated: bool) -> Option<platform::InstanceLock> {
+    let until = Instant::now() + Duration::from_secs(if updated { 10 } else { 0 });
+    loop {
+        if let Some(lock) = platform::instance_lock("gui") {
+            return Some(lock);
+        }
+        if Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 impl App {
@@ -266,6 +299,8 @@ impl App {
             skin_dirty: None,
             demo: None,
             manager_h: 720.0,
+            update: UpdateState::Idle,
+            update_rx: None,
         }
     }
 
@@ -578,6 +613,98 @@ impl App {
     }
 }
 
+impl App {
+    /// The update button was clicked: check, install, or (where installing is not supported)
+    /// open the release page. Each step runs on its own thread; `poll_update` takes the result.
+    pub fn update_clicked(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        match std::mem::replace(&mut self.update, UpdateState::Idle) {
+            UpdateState::Idle => {
+                self.update = UpdateState::Checking;
+                std::thread::spawn(move || {
+                    let _ = tx.send(UpdateMsg::Checked(update::check()));
+                    ctx.request_repaint();
+                });
+            }
+            UpdateState::Available(r) if update::CAN_INSTALL => {
+                self.update = UpdateState::Installing(r.clone());
+                self.say(false, format!("Downloading {}…", r.tag));
+                std::thread::spawn(move || {
+                    let res = update::install_dir().and_then(|dir| update::install(&r, &dir));
+                    let _ = tx.send(UpdateMsg::Installed(r, res));
+                    ctx.request_repaint();
+                });
+            }
+            UpdateState::Available(r) => {
+                update::open_page(&r);
+                self.update = UpdateState::Available(r);
+                return;
+            }
+            busy => {
+                self.update = busy;
+                return;
+            }
+        }
+        self.update_rx = Some(rx);
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some(msg) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
+        self.update_rx = None;
+        match msg {
+            UpdateMsg::Checked(Ok(None)) => {
+                self.update = UpdateState::Idle;
+                self.say(false, format!("lghub-lite v{} is the newest version", update::CURRENT));
+            }
+            UpdateMsg::Checked(Ok(Some(r))) => {
+                let how = if update::CAN_INSTALL {
+                    "click Update to install it"
+                } else {
+                    "click to open its page"
+                };
+                self.say(false, format!("{} is available: {how}", r.tag));
+                self.update = UpdateState::Available(r);
+            }
+            UpdateMsg::Checked(Err(e)) => {
+                self.update = UpdateState::Idle;
+                self.say(true, format!("Update check failed: {e}"));
+            }
+            UpdateMsg::Installed(r, Err(e)) => {
+                self.say(true, format!("Update failed: {e}"));
+                self.update = UpdateState::Available(r);
+            }
+            UpdateMsg::Installed(r, Ok(())) => match self.restart() {
+                Ok(()) => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => {
+                    self.say(true, format!("{} installed; restart lghub-lite to use it ({e})", r.tag));
+                    self.update = UpdateState::Idle;
+                }
+            },
+        }
+    }
+
+    /// Start the new copy (it waits for this one to exit) and the background watcher if it ran.
+    fn restart(&mut self) -> std::io::Result<()> {
+        let dir = update::install_dir().map_err(std::io::Error::other)?;
+        if self.bg_running {
+            let bg = platform::exe("lghub-lite-bg");
+            autostart::stop_running(&bg)?;
+            autostart::start(&format!("\"{}\"", dir.join(&bg).display()))?;
+        }
+        let mut cmd = format!("\"{}\" --updated", dir.join(platform::exe("lghub-lite-gui")).display());
+        for a in std::env::args().skip(1).filter(|a| a != "--tray" && a != "--updated") {
+            cmd += &format!(" \"{a}\"");
+        }
+        autostart::start(&cmd)
+    }
+}
+
 fn worker(
     cfg: PathBuf,
     rx: Receiver<ToWorker>,
@@ -629,6 +756,7 @@ impl eframe::App for App {
                 FromWorker::Fatal(e) => self.fatal = Some(e),
             }
         }
+        self.poll_update(ctx);
         self.update_tray(ctx);
         if self.message.as_ref().is_some_and(|m| m.2.elapsed() > MESSAGE_TIME) {
             self.message = None;

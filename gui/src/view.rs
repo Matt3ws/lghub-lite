@@ -14,7 +14,7 @@ use lghub_lite::watch::Cmd;
 use crate::fonts::{GROTESK, MONO, MONO_SEMIBOLD, PIXEL, SANS, SANS_MEDIUM, SANS_SEMIBOLD, font};
 use crate::history::{self, BARS};
 use crate::skin::{self, BAD, Digits, FACE, FIELDS, FRAME, HI, INK, LCD, LCD_DIM, LCD_INK, LO, OK, Skin};
-use crate::{App, os};
+use crate::{App, UpdateState, os, update};
 
 pub const WIDGET_W: f32 = 420.0;
 const MANAGER_W: f32 = 420.0;
@@ -469,6 +469,7 @@ impl App {
                 ui.ctx().send_viewport_cmd(cmd);
             }
         }
+        self.update_button(ui, &p, at(368.0, 22.0), k);
 
         self.display(ui, &p, o, k, &cur);
         gauge(&p, o, k, &cur);
@@ -514,6 +515,40 @@ impl App {
                 c,
             );
             click(ui, bar, "message", &msg);
+        }
+    }
+
+    /// "Check for updates" in the title bar, right-aligned at `right` (its vertical centre).
+    /// Only a click asks GitHub; a newer release turns it into "Update to vX".
+    fn update_button(&mut self, ui: &mut Ui, p: &Painter, right: Pos2, k: &Skin) {
+        let (label, tip, ready) = match &self.update {
+            UpdateState::Idle => (
+                "Check for updates".to_string(),
+                format!("This is v{}. Look for a newer release on GitHub.", update::CURRENT),
+                false,
+            ),
+            UpdateState::Checking => ("Checking…".to_string(), String::new(), false),
+            UpdateState::Available(r) if update::CAN_INSTALL => (
+                format!("Update to {}", r.tag),
+                "Download it from GitHub, replace the program files and restart".to_string(),
+                true,
+            ),
+            UpdateState::Available(r) => (format!("Get {}", r.tag), r.page(), true),
+            UpdateState::Installing(r) => (format!("Updating to {}…", r.tag), String::new(), false),
+        };
+        let w = text_w(ui, &label, SANS_MEDIUM, 10.5) + 14.0;
+        let rect = Rect::from_min_size(right - vec2(w, 9.0), vec2(w, 18.0));
+        let resp = click(ui, rect, "update", &tip);
+        let ink = if ready { k.c(OK) } else { alpha(k.c(INK), 179) };
+        if ready || resp.hovered() {
+            p.rect_filled(rect, 5.0, k.c(LO));
+        }
+        if ready {
+            p.rect_stroke(rect, 5.0, Stroke::new(1.0, alpha(k.c(OK), 160)), StrokeKind::Inside);
+        }
+        text(p, rect.center(), Align2::CENTER_CENTER, &label, SANS_MEDIUM, 10.5, ink);
+        if resp.clicked() {
+            self.update_clicked(ui.ctx());
         }
     }
 
