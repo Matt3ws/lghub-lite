@@ -452,10 +452,8 @@ impl App {
         if click(ui, name.expand(3.0), "title-name", "Skins").clicked() {
             self.show_skins = !self.show_skins;
         }
-        for (i, (x, hover, tip)) in [(381.0, HI, "Minimise"), (399.0, BAD, "Hide to tray")]
-            .into_iter()
-            .enumerate()
-        {
+        let close = if self.hides_to_tray() { "Hide to tray" } else { "Quit" };
+        for (i, (x, hover, tip)) in [(381.0, HI, "Minimise"), (399.0, BAD, close)].into_iter().enumerate() {
             let c = at(x, 22.0);
             let resp = click(ui, Rect::from_center_size(c, vec2(14.0, 14.0)), ("winbtn", i), tip);
             p.circle_filled(c, 6.0, k.c(LO));

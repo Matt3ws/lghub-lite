@@ -127,6 +127,12 @@ struct App {
     icon_state: Option<IconState>,
     /// Our window, for setting its icons directly (0 if unknown).
     hwnd: isize,
+    /// False on Wayland, where a window cannot be hidden (winit ignores `Visible(false)`):
+    /// closing then minimises the window instead.
+    can_hide: bool,
+    /// Started with `--tray` where the window cannot start hidden (Wayland): minimise it on
+    /// the first frame, once the window exists.
+    minimise_at_start: bool,
     flags: Arc<TrayFlags>,
     quitting: bool,
     autostart_gui: bool,
@@ -210,6 +216,7 @@ fn main() {
         options,
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, bg_running, demo.is_some());
+            app.minimise_at_start = start_hidden && !app.can_hide;
             if !migrated.is_empty() {
                 app.say(false, migrated.join("; "));
             }
@@ -239,14 +246,16 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>, cfg: PathBuf, bg_running: bool, demo: bool) -> App {
         let ctx = cc.egui_ctx.clone();
         fonts::install(&ctx);
-        let mut hwnd = 0isize;
+        let (mut hwnd, mut can_hide) = (0isize, true);
         {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(h) = cc.window_handle()
-                && let RawWindowHandle::Win32(w) = h.as_raw()
-            {
-                hwnd = w.hwnd.get();
-                os::full_client_area(hwnd as _);
+            match cc.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(w)) => {
+                    hwnd = w.hwnd.get();
+                    os::full_client_area(hwnd as _);
+                }
+                Ok(RawWindowHandle::Wayland(_)) => can_hide = false,
+                _ => {}
             }
         }
         // demo mode keeps its settings and skins away from the real ones
@@ -293,6 +302,8 @@ impl App {
             tray_tip: String::new(),
             icon_state: None,
             hwnd,
+            can_hide,
+            minimise_at_start: false,
             flags,
             quitting: false,
             autostart_gui,
@@ -599,6 +610,12 @@ impl App {
         }
     }
 
+    /// Whether closing the window keeps the app running in the tray: only with Tray (start at
+    /// login, in the tray) on, and a tray to go to.
+    pub fn hides_to_tray(&self) -> bool {
+        self.tray.is_some() && self.autostart_gui
+    }
+
     fn set_autostart(&mut self, on: bool) {
         let exe = std::env::current_exe().unwrap_or_default();
         let r = if on {
@@ -791,6 +808,9 @@ impl eframe::App for App {
             }
         }
 
+        if std::mem::take(&mut self.minimise_at_start) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
         if self.flags.skins.swap(false, Ordering::Relaxed) {
             self.show_skins = true;
             self.flags.show.store(true, Ordering::Relaxed);
@@ -804,10 +824,15 @@ impl eframe::App for App {
             self.quitting = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        // Closing the window hides it to the tray; Quit (tray menu) really exits.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.tray.is_some() {
+        // With Tray on, closing the window hides it to the tray (minimises it on Wayland) and
+        // Quit (tray menu) really exits; with Tray off, closing quits.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.hides_to_tray() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(if self.can_hide {
+                egui::ViewportCommand::Visible(false)
+            } else {
+                egui::ViewportCommand::Minimized(true)
+            });
         }
     }
 
