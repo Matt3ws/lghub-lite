@@ -169,7 +169,7 @@ pub fn parse_directory(data: &[u8]) -> Vec<(u16, bool)> {
 /// Text backup: header lines, then `sector XXXX <hex bytes>` per sector. Text so it can be
 /// inspected and diffed; restoring it is not implemented.
 pub fn format_dump(model: u16, info_raw: &[u8], sectors: &[(u16, Vec<u8>)]) -> String {
-    let mut s = String::from("# lghub-lite onboard memory dump (HID++ 0x8100), read-only backup\n");
+    let mut s = String::from("# peripheral-lite onboard memory dump (HID++ 0x8100), read-only backup\n");
     s.push_str(&format!("model {model:04x}\n"));
     s.push_str(&format!("info {}\n", crate::hidpp::hex(info_raw)));
     for (sec, data) in sectors {

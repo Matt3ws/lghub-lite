@@ -14,7 +14,7 @@ const FILE_MAX: u64 = 64 << 10;
 const REPEAT: u64 = 30 * 60;
 
 pub fn now() -> u64 {
-    lghub_lite::battery::unix_now()
+    peripheral_lite::battery::unix_now()
 }
 
 pub struct History {
@@ -96,7 +96,7 @@ impl History {
 fn append(path: &Path, t: u64, pct: u8, all: &[(u64, u8)]) -> std::io::Result<()> {
     if fs::metadata(path).is_ok_and(|m| m.len() > FILE_MAX) {
         let text: String = all.iter().map(|(t, p)| format!("{t},{p}\n")).collect();
-        return lghub_lite::config::write_atomic(path, &text).map_err(std::io::Error::other);
+        return peripheral_lite::config::write_atomic(path, &text).map_err(std::io::Error::other);
     }
     let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(f, "{t},{pct}")

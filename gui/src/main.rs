@@ -1,11 +1,11 @@
-//! lghub-lite-gui: a small skinnable battery widget + tray front end over the lghub-lite library.
+//! peripheral-lite-gui: a small skinnable battery widget + tray front end over the peripheral-lite library.
 //! Not affiliated with or endorsed by Logitech.
 //!
 //! Threads: the UI thread runs eframe; one worker thread owns the `watch::Monitor` and does all
 //! HID I/O (requests can block for seconds while a wireless device wakes up), so the UI never
 //! blocks. Commands go UI -> worker over a channel plus `hid::Waker`; updates come back over a
 //! channel plus `request_repaint`. While the window is hidden nothing is repainted and the
-//! worker sleeps in the same WaitForMultipleObjects as `lghub-lite watch`.
+//! worker sleeps in the same WaitForMultipleObjects as `peripheral-lite watch`.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod demo;
@@ -16,6 +16,7 @@ mod icons;
 mod os;
 mod skin;
 mod tray;
+mod update;
 mod view;
 
 use std::path::PathBuf;
@@ -26,13 +27,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use history::History;
-use lghub_lite::device::{Event, MODE_ONBOARD};
-use lghub_lite::hid::Waker;
-use lghub_lite::watch::{Cmd, Monitor, Snapshot, Update};
-use lghub_lite::{autostart, battery, config, hidpp, platform};
+use peripheral_lite::device::{Event, MODE_ONBOARD};
+use peripheral_lite::hid::Waker;
+use peripheral_lite::watch::{Cmd, Monitor, Snapshot, Update};
+use peripheral_lite::{autostart, battery, config, hidpp, migrate, platform};
 use skin::{Settings, Skin};
 
-const TITLE: &str = "lghub-lite";
+const TITLE: &str = "peripheral-lite";
 /// Messages under the controls disappear after this long.
 const MESSAGE_TIME: Duration = Duration::from_secs(8);
 
@@ -46,6 +47,19 @@ enum FromWorker {
     // boxed: a Snapshot is several times larger than the other messages
     Snapshot(String, Result<Box<Snapshot>, String>),
     Fatal(String),
+}
+
+/// The update button: what it shows and does next.
+pub enum UpdateState {
+    Idle,
+    Checking,
+    Available(update::Release),
+    Installing(update::Release),
+}
+
+enum UpdateMsg {
+    Checked(Result<Option<update::Release>, String>),
+    Installed(update::Release, Result<(), String>),
 }
 
 type IconState = (Option<icons::Level>, Option<icons::Level>, Option<icons::Level>);
@@ -113,6 +127,12 @@ struct App {
     icon_state: Option<IconState>,
     /// Our window, for setting its icons directly (0 if unknown).
     hwnd: isize,
+    /// False on Wayland, where a window cannot be hidden (winit ignores `Visible(false)`):
+    /// closing then minimises the window instead.
+    can_hide: bool,
+    /// Started with `--tray` where the window cannot start hidden (Wayland): minimise it on
+    /// the first frame, once the window exists.
+    minimise_at_start: bool,
     flags: Arc<TrayFlags>,
     quitting: bool,
     autostart_gui: bool,
@@ -134,6 +154,8 @@ struct App {
     demo: Option<Vec<Snapshot>>,
     /// Height of the skin manager panel at the last frame.
     manager_h: f32,
+    update: UpdateState,
+    update_rx: Option<Receiver<UpdateMsg>>,
 }
 
 fn main() {
@@ -148,10 +170,16 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("presets.txt"));
 
     let demo = demo::Options::parse(&args);
+    // before the instance lock: an old lghub-lite app still running is stopped here
+    let migrated = if demo.is_none() {
+        migrate::run("gui")
+    } else {
+        Vec::new()
+    };
     // One app per session; the lock is held until the process exits.
     let _instance = match demo {
         Some(_) => None,
-        None => match platform::instance_lock("gui") {
+        None => match instance_lock(args.iter().any(|a| a == "--updated")) {
             Some(lock) => Some(lock),
             None => {
                 os::focus_existing(TITLE);
@@ -159,14 +187,17 @@ fn main() {
             }
         },
     };
+    if demo.is_none() {
+        update::clean_up();
+    }
     let bg_running = demo.is_none() && platform::instance_running("bg");
 
     let big = os::icon_sizes().1;
     let (w, h, rgba) = (big, big, icons::app(big, None));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(if demo.is_some() { "lghub-lite demo" } else { TITLE })
-            .with_app_id("lghub-lite") // matches packaging/linux/lghub-lite.desktop
+            .with_title(if demo.is_some() { "peripheral-lite demo" } else { TITLE })
+            .with_app_id("peripheral-lite") // matches packaging/linux/peripheral-lite.desktop
             .with_inner_size([view::WIDGET_W, 420.0])
             .with_resizable(false)
             .with_decorations(false)
@@ -185,6 +216,10 @@ fn main() {
         options,
         Box::new(move |cc| {
             let mut app = App::new(cc, cfg, bg_running, demo.is_some());
+            app.minimise_at_start = start_hidden && !app.can_hide;
+            if !migrated.is_empty() {
+                app.say(false, migrated.join("; "));
+            }
             if let Some(d) = demo {
                 d.apply(&mut app);
             }
@@ -193,23 +228,39 @@ fn main() {
     );
 }
 
+/// The single-instance lock. Right after an update the old copy is still exiting: wait for it.
+fn instance_lock(updated: bool) -> Option<platform::InstanceLock> {
+    let until = Instant::now() + Duration::from_secs(if updated { 10 } else { 0 });
+    loop {
+        if let Some(lock) = platform::instance_lock("gui") {
+            return Some(lock);
+        }
+        if Instant::now() >= until {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 impl App {
     fn new(cc: &eframe::CreationContext<'_>, cfg: PathBuf, bg_running: bool, demo: bool) -> App {
         let ctx = cc.egui_ctx.clone();
         fonts::install(&ctx);
-        let mut hwnd = 0isize;
+        let (mut hwnd, mut can_hide) = (0isize, true);
         {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(h) = cc.window_handle()
-                && let RawWindowHandle::Win32(w) = h.as_raw()
-            {
-                hwnd = w.hwnd.get();
-                os::full_client_area(hwnd as _);
+            match cc.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(w)) => {
+                    hwnd = w.hwnd.get();
+                    os::full_client_area(hwnd as _);
+                }
+                Ok(RawWindowHandle::Wayland(_)) => can_hide = false,
+                _ => {}
             }
         }
         // demo mode keeps its settings and skins away from the real ones
         let dir = if demo {
-            std::env::temp_dir().join("lghub-lite-demo")
+            std::env::temp_dir().join("peripheral-lite-demo")
         } else {
             cfg.parent().map(PathBuf::from).unwrap_or_default()
         };
@@ -232,7 +283,7 @@ impl App {
         let autostart_gui = autostart::status()
             .ok()
             .flatten()
-            .is_some_and(|c| c.contains("lghub-lite-gui"));
+            .is_some_and(|c| c.contains("peripheral-lite-gui"));
         let mut skins = skin::builtins();
         skins.extend(skin::load_custom(&dir.join("skins")));
         let settings = Settings::load(&dir.join("app.txt"));
@@ -251,6 +302,8 @@ impl App {
             tray_tip: String::new(),
             icon_state: None,
             hwnd,
+            can_hide,
+            minimise_at_start: false,
             flags,
             quitting: false,
             autostart_gui,
@@ -266,6 +319,8 @@ impl App {
             skin_dirty: None,
             demo: None,
             manager_h: 720.0,
+            update: UpdateState::Idle,
+            update_rx: None,
         }
     }
 
@@ -314,7 +369,7 @@ impl App {
             .filter(|s| s.sel == sel)
             .and_then(|s| s.headset.as_mut())
         {
-            use lghub_lite::corsair::prop;
+            use peripheral_lite::corsair::prop;
             *h = match cmd {
                 Cmd::SetLights(on) => h.with(prop::BRIGHTNESS as u16, if on { 1000 } else { 0 }),
                 Cmd::SetAutoOff(0) => h.with(prop::SLEEP_ENABLED as u16, 0),
@@ -555,13 +610,19 @@ impl App {
         }
     }
 
+    /// Whether closing the window keeps the app running in the tray: only with Tray (start at
+    /// login, in the tray) on, and a tray to go to.
+    pub fn hides_to_tray(&self) -> bool {
+        self.tray.is_some() && self.autostart_gui
+    }
+
     fn set_autostart(&mut self, on: bool) {
         let exe = std::env::current_exe().unwrap_or_default();
         let r = if on {
             autostart::enable(&format!("\"{}\" --tray", exe.display())).and_then(|_| {
                 // The GUI now takes over from the background watcher.
                 if self.bg_running {
-                    autostart::stop_running(&platform::exe("lghub-lite-bg"))?;
+                    autostart::stop_running(&platform::exe("peripheral-lite-bg"))?;
                     self.bg_running = false;
                     let _ = self.tx.send(ToWorker::ApplyPresets(true));
                     self.waker.wake();
@@ -575,6 +636,107 @@ impl App {
             Ok(()) => self.autostart_gui = on,
             Err(e) => self.say(true, format!("start at login: {e}")),
         }
+    }
+}
+
+impl App {
+    /// The update button was clicked: check, install, or (where installing is not supported)
+    /// open the release page. Each step runs on its own thread; `poll_update` takes the result.
+    pub fn update_clicked(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        match std::mem::replace(&mut self.update, UpdateState::Idle) {
+            UpdateState::Idle => {
+                self.update = UpdateState::Checking;
+                std::thread::spawn(move || {
+                    let _ = tx.send(UpdateMsg::Checked(update::check()));
+                    ctx.request_repaint();
+                });
+            }
+            UpdateState::Available(r) if update::CAN_INSTALL => {
+                self.update = UpdateState::Installing(r.clone());
+                self.say(false, format!("Downloading {}…", r.tag));
+                std::thread::spawn(move || {
+                    let res = update::install_dir().and_then(|dir| update::install(&r, &dir));
+                    let _ = tx.send(UpdateMsg::Installed(r, res));
+                    ctx.request_repaint();
+                });
+            }
+            UpdateState::Available(r) => {
+                update::open_page(&r);
+                self.update = UpdateState::Available(r);
+                return;
+            }
+            busy => {
+                self.update = busy;
+                return;
+            }
+        }
+        self.update_rx = Some(rx);
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some(msg) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+            return;
+        };
+        self.update_rx = None;
+        match msg {
+            UpdateMsg::Checked(Ok(None)) => {
+                self.update = UpdateState::Idle;
+                self.say(
+                    false,
+                    format!("peripheral-lite v{} is the newest version", update::CURRENT),
+                );
+            }
+            UpdateMsg::Checked(Ok(Some(r))) => {
+                let how = if update::CAN_INSTALL {
+                    "click Update to install it"
+                } else {
+                    "click to open its page"
+                };
+                self.say(false, format!("{} is available: {how}", r.tag));
+                self.update = UpdateState::Available(r);
+            }
+            UpdateMsg::Checked(Err(e)) => {
+                self.update = UpdateState::Idle;
+                self.say(true, format!("Update check failed: {e}"));
+            }
+            UpdateMsg::Installed(r, Err(e)) => {
+                self.say(true, format!("Update failed: {e}"));
+                self.update = UpdateState::Available(r);
+            }
+            UpdateMsg::Installed(r, Ok(())) => match self.restart() {
+                Ok(()) => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Err(e) => {
+                    self.say(
+                        true,
+                        format!("{} installed; restart peripheral-lite to use it ({e})", r.tag),
+                    );
+                    self.update = UpdateState::Idle;
+                }
+            },
+        }
+    }
+
+    /// Start the new copy (it waits for this one to exit) and the background watcher if it ran.
+    fn restart(&mut self) -> std::io::Result<()> {
+        let dir = update::install_dir().map_err(std::io::Error::other)?;
+        if self.bg_running {
+            let bg = platform::exe("peripheral-lite-bg");
+            autostart::stop_running(&bg)?;
+            autostart::start(&format!("\"{}\"", dir.join(&bg).display()))?;
+        }
+        let mut cmd = format!(
+            "\"{}\" --updated",
+            dir.join(platform::exe("peripheral-lite-gui")).display()
+        );
+        for a in std::env::args().skip(1).filter(|a| a != "--tray" && a != "--updated") {
+            cmd += &format!(" \"{a}\"");
+        }
+        autostart::start(&cmd)
     }
 }
 
@@ -629,6 +791,7 @@ impl eframe::App for App {
                 FromWorker::Fatal(e) => self.fatal = Some(e),
             }
         }
+        self.poll_update(ctx);
         self.update_tray(ctx);
         if self.message.as_ref().is_some_and(|m| m.2.elapsed() > MESSAGE_TIME) {
             self.message = None;
@@ -645,6 +808,9 @@ impl eframe::App for App {
             }
         }
 
+        if std::mem::take(&mut self.minimise_at_start) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
         if self.flags.skins.swap(false, Ordering::Relaxed) {
             self.show_skins = true;
             self.flags.show.store(true, Ordering::Relaxed);
@@ -658,10 +824,15 @@ impl eframe::App for App {
             self.quitting = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        // Closing the window hides it to the tray; Quit (tray menu) really exits.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.tray.is_some() {
+        // With Tray on, closing the window hides it to the tray (minimises it on Wayland) and
+        // Quit (tray menu) really exits; with Tray off, closing quits.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.hides_to_tray() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(if self.can_hide {
+                egui::ViewportCommand::Visible(false)
+            } else {
+                egui::ViewportCommand::Minimized(true)
+            });
         }
     }
 

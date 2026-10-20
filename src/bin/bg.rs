@@ -1,4 +1,4 @@
-//! lghub-lite-bg: the windowless `watch` that `lghub-lite autostart on` registers for login.
+//! peripheral-lite-bg: the windowless `watch` that `peripheral-lite autostart on` registers for login.
 //! Output goes to watch.log next to the preset file (moved to watch.log.old at start-up once
 //! it passes 1 MB). Only one copy runs per user session.
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -6,7 +6,7 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 
-use lghub_lite::{config, hidpp, platform, watch};
+use peripheral_lite::{config, hidpp, migrate, platform, watch};
 
 const LOG_MAX: u64 = 1 << 20;
 
@@ -18,6 +18,7 @@ fn main() {
             cfg = args.next().map(PathBuf::from);
         }
     }
+    let migrated = migrate::run("bg");
     let Some(cfg) = cfg.or_else(config::default_path) else {
         std::process::exit(2);
     };
@@ -40,7 +41,10 @@ fn main() {
     };
     // Route println!/eprintln! into the log; `file` stays open until main returns.
     platform::redirect_stdio(&file);
-    println!("lghub-lite-bg {} started", env!("CARGO_PKG_VERSION"));
+    println!("peripheral-lite-bg {} started", env!("CARGO_PKG_VERSION"));
+    for m in migrated {
+        println!("{m}");
+    }
     if let Err(e) = watch::run(hidpp::WATCH_SWID, false, &cfg) {
         println!("error: {e}");
     }

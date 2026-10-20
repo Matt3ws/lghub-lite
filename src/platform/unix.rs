@@ -23,34 +23,51 @@ pub fn local_time() -> [u16; 6] {
     }
 }
 
-/// `~/Library/Application Support/lghub-lite`.
-#[cfg(target_os = "macos")]
+/// `~/Library/Application Support/peripheral-lite` on macOS; `$XDG_CONFIG_HOME/peripheral-lite`, else
+/// `~/.config/peripheral-lite`, on Linux.
 pub fn config_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(home.join("Library/Application Support/lghub-lite"))
+    config_dir_of(crate::NAME)
 }
 
-/// `$XDG_CONFIG_HOME/lghub-lite`, else `~/.config/lghub-lite`.
+/// `~/Library/Application Support/<app>`.
+#[cfg(target_os = "macos")]
+pub fn config_dir_of(app: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join("Library/Application Support").join(app))
+}
+
+/// `$XDG_CONFIG_HOME/<app>`, else `~/.config/<app>`.
 #[cfg(not(target_os = "macos"))]
-pub fn config_dir() -> Option<PathBuf> {
+pub fn config_dir_of(app: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("lghub-lite"))
+    Some(base.join(app))
 }
 
 /// Where lock files live: `$XDG_RUNTIME_DIR` (per user, per session; on macOS `$TMPDIR`,
-/// which is per user), else the config dir.
+/// which is per user), else the config dir (created if missing).
 fn lock_path(name: &str) -> Option<PathBuf> {
+    let p = lock_path_of(crate::NAME, name)?;
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    Some(p)
+}
+
+/// `app`'s lock file `name`, without creating its folder (looking for an old copy must not
+/// bring back the old settings folder).
+fn lock_path_of(app: &str, name: &str) -> Option<PathBuf> {
     let runtime = if cfg!(target_os = "macos") {
         "TMPDIR"
     } else {
         "XDG_RUNTIME_DIR"
     };
-    let dir = std::env::var_os(runtime).map(PathBuf::from).or_else(config_dir)?;
-    let _ = std::fs::create_dir_all(&dir);
-    Some(dir.join(format!("lghub-lite-{name}.lock")))
+    let dir = std::env::var_os(runtime)
+        .map(PathBuf::from)
+        .or_else(|| config_dir_of(app))?;
+    Some(dir.join(format!("{app}-{name}.lock")))
 }
 
 /// Held for as long as this process runs the `name` instance ("bg", "gui"): an exclusive
@@ -72,7 +89,7 @@ pub fn instance_lock(name: &str) -> Option<InstanceLock> {
     Some(InstanceLock(f))
 }
 
-/// A lock that lghub-lite processes take in turns (flock on a lock file), e.g. around a
+/// A lock that peripheral-lite processes take in turns (flock on a lock file), e.g. around a
 /// conversation with a device whose replies cannot be told apart.
 pub struct SharedLock(File);
 
@@ -110,7 +127,13 @@ impl SharedLock {
 
 /// Is the `name` instance running (without keeping its lock)?
 pub fn instance_running(name: &str) -> bool {
-    let Some(p) = lock_path(name) else { return false };
+    instance_running_of(crate::NAME, name)
+}
+
+/// Is `app`'s `name` instance running? `app` is `crate::OLD_NAME` for a copy from before the
+/// rename.
+pub fn instance_running_of(app: &str, name: &str) -> bool {
+    let Some(p) = lock_path_of(app, name) else { return false };
     let Ok(f) = OpenOptions::new().read(true).open(p) else {
         return false;
     };

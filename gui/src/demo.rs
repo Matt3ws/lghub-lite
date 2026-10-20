@@ -2,9 +2,9 @@
 //! screenshots and for comparing the widget with the design. Extra flags open parts of it:
 //! `--demo-select N`, `--demo-drawer`, `--demo-skins`, `--demo-skin ID`.
 
-use lghub_lite::corsair::Settings;
-use lghub_lite::device::{Dpi, DpiCaps, MODE_HOST};
-use lghub_lite::watch::Snapshot;
+use peripheral_lite::corsair::Settings;
+use peripheral_lite::device::{Dpi, DpiCaps, MODE_HOST};
+use peripheral_lite::watch::Snapshot;
 
 use crate::history::{self, History};
 use crate::{App, Row};

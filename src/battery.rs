@@ -4,7 +4,7 @@
 //! 1. `curve-<model>.txt`: **our own measurement** of a full discharge, built from the voltage
 //!    recording `watch`/the app keep (`voltage-<model>.csv`) and refined with every cycle.
 //! 2. A G HUB power-model XML the user copied from their own install (never bundled).
-//! 3. A built-in measured curve shipped with lghub-lite (our own data, none yet).
+//! 3. A built-in measured curve shipped with peripheral-lite (our own data, none yet).
 //! 4. A generic single-cell Li-ion estimate [PUB], always marked as approximate.
 //!
 //! All arithmetic is fixed-point integers (Rust's float code added ~50 KB to the exe).
@@ -185,7 +185,7 @@ const GENERIC_LIION: [(u32, u32); 21] = [
 /// (mV, remaining permille) with falling voltage.
 type Points = &'static [(u32, u32)];
 
-/// Measured curves shipped with lghub-lite: (model, runtime tenths, points). Our own data only.
+/// Measured curves shipped with peripheral-lite: (model, runtime tenths, points). Our own data only.
 const BUILTIN: &[(u16, u32, Points)] = &[];
 
 fn approx(model: u16) -> Curve {
@@ -207,7 +207,7 @@ fn measured_path(dir: &Path, model: u16) -> PathBuf {
 
 pub fn format_measured(c: &Curve) -> String {
     let mut s = format!(
-        "# lghub-lite measured discharge curve: mV,remaining permille (own measurement)\nmodel {:04x}\nruntime_tenths {}\nsession_end {}\n",
+        "# peripheral-lite measured discharge curve: mV,remaining permille (own measurement)\nmodel {:04x}\nruntime_tenths {}\nsession_end {}\n",
         c.model,
         c.runtime_tenths.unwrap_or(0),
         c.session_end
@@ -308,7 +308,7 @@ pub const GHUB_DEPOTS: &str = r"C:\ProgramData\LGHUB\depots";
 
 /// Look for a power model for `model` in a local G HUB install (`GHUB_DEPOTS`, at most three
 /// folders deep, file names containing "battery"). Only used when the user asks to import one;
-/// lghub-lite never reads G HUB's folders otherwise.
+/// peripheral-lite never reads G HUB's folders otherwise.
 pub fn find_ghub_curve(model: u16) -> Option<PathBuf> {
     if !cfg!(windows) {
         return None; // G HUB exists only on Windows
@@ -432,7 +432,7 @@ pub fn record(dir: &Path, model: u16, mv: u16, flags: u8) -> std::io::Result<()>
     let new = !path.exists();
     let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     if new {
-        writeln!(f, "# lghub-lite voltage recording: unix_time,mV,flags")?;
+        writeln!(f, "# peripheral-lite voltage recording: unix_time,mV,flags")?;
     }
     writeln!(f, "{},{mv},{flags:#04x}", unix_now())
 }
@@ -596,7 +596,7 @@ pub fn update_measured(dir: &Path, model: u16) -> Result<Option<Curve>, String> 
     Ok(Some(curve))
 }
 
-/// One line about the recording, for the app and `lghub-lite curve`.
+/// One line about the recording, for the app and `peripheral-lite curve`.
 pub fn recording_status(dir: &Path, model: u16) -> String {
     let s = read_log(dir, model);
     if s.is_empty() {
@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn record_read_update_in_a_folder() {
-        let dir = std::env::temp_dir().join(format!("lghub-lite-batt-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("peripheral-lite-batt-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         // find_curve falls back to the estimate when nothing is there
         assert!(find_curve(&dir, 0x1234).is_approx());

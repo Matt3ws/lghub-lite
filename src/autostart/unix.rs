@@ -51,8 +51,8 @@ mod tests {
     #[test]
     fn command_lines() {
         assert_eq!(
-            split(r#""/opt/lghub lite/lghub-lite-bg" --config "/home/a b/p.txt""#),
-            ["/opt/lghub lite/lghub-lite-bg", "--config", "/home/a b/p.txt"]
+            split(r#""/opt/peripheral lite/peripheral-lite-bg" --config "/home/a b/p.txt""#),
+            ["/opt/peripheral lite/peripheral-lite-bg", "--config", "/home/a b/p.txt"]
         );
         assert_eq!(split("a  b"), ["a", "b"]);
     }

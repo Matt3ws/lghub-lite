@@ -27,17 +27,22 @@ pub fn local_time() -> [u16; 6] {
     [t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond]
 }
 
-/// `%APPDATA%\lghub-lite`.
+/// `%APPDATA%\peripheral-lite`.
 pub fn config_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("lghub-lite"))
+    config_dir_of(crate::NAME)
+}
+
+/// `%APPDATA%\<app>`.
+pub fn config_dir_of(app: &str) -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(app))
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
-fn mutex_name(name: &str) -> Vec<u16> {
-    wide(&format!("Local\\lghub-lite-{name}"))
+fn mutex_name(app: &str, name: &str) -> Vec<u16> {
+    wide(&format!("Local\\{app}-{name}"))
 }
 
 /// Held for as long as this process runs the `name` instance ("bg", "gui").
@@ -55,7 +60,7 @@ impl Drop for InstanceLock {
 
 /// Take the session-wide lock `name`; None if another process already holds it.
 pub fn instance_lock(name: &str) -> Option<InstanceLock> {
-    let n = mutex_name(name);
+    let n = mutex_name(crate::NAME, name);
     // SAFETY: NUL-terminated name, default security.
     let h = unsafe { CreateMutexW(null(), 0, n.as_ptr()) };
     if h.is_null() {
@@ -70,7 +75,7 @@ pub fn instance_lock(name: &str) -> Option<InstanceLock> {
     Some(InstanceLock(h))
 }
 
-/// A lock that lghub-lite processes take in turns (a named mutex), e.g. around a conversation
+/// A lock that peripheral-lite processes take in turns (a named mutex), e.g. around a conversation
 /// with a device whose replies cannot be told apart.
 pub struct SharedLock(HANDLE);
 
@@ -86,7 +91,7 @@ impl Drop for SharedLock {
 }
 
 pub fn shared_lock(name: &str) -> Option<SharedLock> {
-    let n = mutex_name(name);
+    let n = mutex_name(crate::NAME, name);
     // SAFETY: NUL-terminated name, default security; opens the mutex if it exists.
     let h = unsafe { CreateMutexW(null(), 0, n.as_ptr()) };
     (!h.is_null()).then_some(SharedLock(h))
@@ -108,7 +113,13 @@ impl SharedLock {
 
 /// Is the `name` instance running in this session (without taking its lock)?
 pub fn instance_running(name: &str) -> bool {
-    let n = mutex_name(name);
+    instance_running_of(crate::NAME, name)
+}
+
+/// Is `app`'s `name` instance running? `app` is `crate::OLD_NAME` for a copy from before the
+/// rename.
+pub fn instance_running_of(app: &str, name: &str) -> bool {
+    let n = mutex_name(app, name);
     // SAFETY: NUL-terminated name; handle closed right away.
     let h = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, n.as_ptr()) };
     if h.is_null() {

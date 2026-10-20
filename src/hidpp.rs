@@ -29,7 +29,7 @@ pub const ERR20: u8 = 0xFF;
 /// 0x03 keeps us out of that range. [INF] choice, not a protocol constant.
 pub const DEFAULT_SWID: u8 = 0x03;
 
-/// The long-running watchers (app, lghub-lite-bg) use their own ID: every program reading a
+/// The long-running watchers (app, peripheral-lite-bg) use their own ID: every program reading a
 /// device sees every input report, and with the same ID a CLI command could take a watcher's
 /// reply to the same request (e.g. two root GetFeature calls) for its own [HW 2026-10-16: a
 /// DPI read-back saw another feature's version while the app refreshed after a DPI event].
@@ -392,7 +392,7 @@ fn open_hint(path: &str, e: std::io::Error) -> String {
     #[cfg(target_os = "linux")]
     let hint = match e.kind() {
         std::io::ErrorKind::PermissionDenied => {
-            " (permission denied: install the udev rule packaging/linux/70-lghub-lite.rules, see the README)"
+            " (permission denied: install the udev rule packaging/linux/70-peripheral-lite.rules, see the README)"
         }
         _ => "",
     };

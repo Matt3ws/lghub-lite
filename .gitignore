@@ -11,6 +11,6 @@ LGHUB/
 /design-ref/
 /.claude/
 /gui/target
-/lghub-lite-*-windows-x64*
-/lghub-lite-*-linux-x64-experimental*
-/lghub-lite-*-macos-*
+/peripheral-lite-*-windows-x64*
+/peripheral-lite-*-linux-x64-experimental*
+/peripheral-lite-*-macos-*

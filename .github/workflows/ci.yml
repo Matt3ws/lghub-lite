@@ -36,8 +36,8 @@ jobs:
       # branch on hardware without a release.
       - uses: actions/upload-artifact@v4
         with:
-          name: lghub-lite-windows-x64-${{ github.sha }}
-          path: lghub-lite-ci-windows-x64/
+          name: peripheral-lite-windows-x64-${{ github.sha }}
+          path: peripheral-lite-ci-windows-x64/
           retention-days: 14
 
   linux:
@@ -62,12 +62,12 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq xvfb libgl1-mesa-dri libegl1 libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2
           set +e
-          timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo
+          timeout 15s xvfb-run -a ./gui/target/release/peripheral-lite-gui --demo
           code=$?
           # still running after 15 s (killed by timeout, 124) = started and kept rendering
           echo "exit code $code"; [ "$code" -eq 124 ] || exit 1
           # again with the Corsair headset's settings drawer open
-          timeout 15s xvfb-run -a ./gui/target/release/lghub-lite-gui --demo --demo-select 3 --demo-drawer
+          timeout 15s xvfb-run -a ./gui/target/release/peripheral-lite-gui --demo --demo-select 3 --demo-drawer
           code=$?
           echo "exit code $code"; [ "$code" -eq 124 ]
       - name: Release package (the Release workflow's script, so packaging breaks show here)
